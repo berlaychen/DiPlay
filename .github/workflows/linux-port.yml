@@ -1,0 +1,23 @@
+name: Linux port
+on:
+  push:
+    branches: [feat/linux-native-web]
+  pull_request:
+    paths: ['desktop/**', '.github/workflows/linux-port.yml']
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Archive public source for offline development
+        run: git archive HEAD -o /tmp/diplay-source.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: diplay-port-source
+          path: /tmp/diplay-source.tar
+          retention-days: 1
