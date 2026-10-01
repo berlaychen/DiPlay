@@ -1,6 +1,6 @@
 'use strict';
 const $=id=>document.getElementById(id),canvas=$('screen'),context=canvas.getContext('2d',{alpha:false});
-let ws,decoder,configuration,waitingKey=true,videoCount=0,audioContext,playback,micStream,micNode,micSource,micMute,micId=null;
+let ws,decoder,decoderOptions,configuration,waitingKey=true,videoCount=0,audioContext,playback,micStream,micNode,micSource,micMute,micId=null;
 let codecEpoch=0;
 function diagnostic(text){$('diagnostic').textContent=text;}
 function send(value){if(ws?.readyState===WebSocket.OPEN)ws.send(JSON.stringify(value));}
@@ -33,26 +33,34 @@ async function startMicrophone(id){
 async function configure(m){
   const epoch=++codecEpoch;
   configuration=m;waitingKey=true;videoCount=0;
-  decoder?.close();decoder=null;
+  if(decoder&&decoder.state!=='closed')decoder.close();decoder=null;decoderOptions=null;
   if(!isSecureContext||!('VideoDecoder'in window)){diagnostic('WebCodecs requires a supported browser on localhost or HTTPS');return;}
-  const options={codec:m.codec,optimizeForLatency:true,hardwareAcceleration:'prefer-hardware'};
-  const support=await VideoDecoder.isConfigSupported(options);
-  if(epoch!==codecEpoch)return;
-  if(!support.supported){diagnostic('H.264 WebCodecs decoder unavailable on this browser');return;}
+  // A preferred hardware decoder may be unavailable on old GPUs or headless CI.
+  // Do not reject a working software H.264 decoder merely because HW is absent.
+  for(const acceleration of ['prefer-hardware','no-preference','prefer-software']){
+    const candidate={codec:m.codec,optimizeForLatency:true,hardwareAcceleration:acceleration};
+    try{
+      const support=await VideoDecoder.isConfigSupported(candidate);
+      if(epoch!==codecEpoch)return;
+      if(support.supported){decoderOptions=candidate;break;}
+    }catch(e){if(epoch!==codecEpoch)return;}
+  }
+  if(!decoderOptions){diagnostic('No H.264 WebCodecs decoder: use a codec-enabled browser or the native frontend');return;}
   decoder=new VideoDecoder({output:frame=>{
     if(canvas.width!==frame.displayWidth)canvas.width=frame.displayWidth;
     if(canvas.height!==frame.displayHeight)canvas.height=frame.displayHeight;
     context.drawImage(frame,0,0);frame.close();$('placeholder').hidden=true;$('counter').textContent=(++videoCount)+' frames';
     if(videoCount===1)send({op:'rendered'});
   },error:error=>{diagnostic('Decoder: '+error.message);waitingKey=true;send({op:'keyframe'});}});
-  decoder.configure(options);send({op:'keyframe'});diagnostic(m.codec+' / WebCodecs (hardware use depends on browser/driver)');
+  decoder.configure(decoderOptions);send({op:'keyframe'});
+  diagnostic(m.codec+' / WebCodecs '+decoderOptions.hardwareAcceleration+' (preference, not proof of hardware use)');
 }
 function receive(m,data){
   if(m.event==='authorized'){$('login').hidden=true;return;}
   if(m.event==='status'){$('state').textContent=m.state;return;}
   if(m.event==='video_config'){configure(m).catch(e=>diagnostic(e.message));return;}
   if(m.event==='video'&&data&&decoder?.state==='configured'){
-    if(decoder.decodeQueueSize>4){waitingKey=true;decoder.reset();decoder.configure({codec:configuration.codec,optimizeForLatency:true,hardwareAcceleration:'prefer-hardware'});send({op:'keyframe'});}
+    if(decoder.decodeQueueSize>4){waitingKey=true;decoder.reset();decoder.configure(decoderOptions);send({op:'keyframe'});}
     if(waitingKey&&!m.key)return;
     if(m.key)waitingKey=false;
     try{decoder.decode(new EncodedVideoChunk({type:m.key?'key':'delta',timestamp:m.time_us,data}));}catch(e){waitingKey=true;send({op:'keyframe'});diagnostic(e.message);}
@@ -78,7 +86,7 @@ $('login').querySelector('form').onsubmit=event=>{
       receive(JSON.parse(new TextDecoder().decode(bytes.subarray(4,4+size))),bytes.subarray(4+size));
     }catch(e){diagnostic('Stream: '+e.message);}
   };
-  ws.onclose=event=>{if(socket!==ws)return;$('state').textContent='Disconnected';$('login').hidden=false;$('error').textContent=event.reason||'Receiver disconnected';stopMicrophone();playback?.port.postMessage({op:'reset'});decoder?.close();decoder=null;codecEpoch++;};
+  ws.onclose=event=>{if(socket!==ws)return;$('state').textContent='Disconnected';$('login').hidden=false;$('error').textContent=event.reason||'Receiver disconnected';stopMicrophone();playback?.port.postMessage({op:'reset'});if(decoder&&decoder.state!=='closed')decoder.close();decoder=null;codecEpoch++;};
 };
 $('audio').onclick=()=>enableAudio().catch(e=>diagnostic(e.message));
 $('mic').onchange=()=>{if(!$('mic').checked)stopMicrophone();};

@@ -1,7 +1,7 @@
-"""Real browser + backend synthetic AVC/PCM smoke; never an iPhone test.
+"""Real codec-enabled Chrome + backend synthetic AVC/PCM test; not an iPhone test.
 
-Keep the production CSP enabled. Poll DOM state instead of wait_for_function,
-whose injected eval is rejected by a strict CSP on some Chromium builds.
+Production CSP stays enabled. Hardware preference may be unsupported on CI;
+the real client probes a usable fallback rather than claiming GPU acceleration.
 """
 import json
 from pathlib import Path
@@ -21,7 +21,7 @@ with tempfile.TemporaryDirectory(prefix='diplay-web-smoke-') as temporary:
     config.write_text(f'state_dir="{state}"\n[video]\nwidth=640\nheight=360\nfps=30\n[web]\nhost="127.0.0.1"\nport={port}\n')
     with (OUTPUT/'web.log').open('w') as logfile:
         process=subprocess.Popen([str(ROOT/'diplay'),'--demo','--mode','web','--config',str(config),
-                                  '--duration','40','--stats',str(OUTPUT/'web-stats.json')],stdout=logfile,stderr=logfile)
+                                  '--duration','45','--stats',str(OUTPUT/'web-stats.json')],stdout=logfile,stderr=logfile)
         try:
             origin=f'http://127.0.0.1:{port}'
             for _ in range(100):
@@ -32,11 +32,19 @@ with tempfile.TemporaryDirectory(prefix='diplay-web-smoke-') as temporary:
             else: raise RuntimeError('Backend did not start')
             errors=[]
             with sync_playwright() as pw:
-                browser=pw.chromium.launch(args=['--autoplay-policy=no-user-gesture-required'])
+                browser=pw.chromium.launch(channel='chrome',args=['--autoplay-policy=no-user-gesture-required'])
                 page=browser.new_page(viewport={'width':1000,'height':720})
                 page.on('pageerror',lambda error:errors.append(str(error)))
                 try:
                     page.goto(origin)
+                    support=page.evaluate('''async () => {
+                      const result={};
+                      for(const hardwareAcceleration of ['prefer-hardware','no-preference','prefer-software']){
+                        result[hardwareAcceleration]=await VideoDecoder.isConfigSupported({codec:'avc1.42C01E',optimizeForLatency:true,hardwareAcceleration});
+                      }
+                      return result;
+                    }''')
+                    (OUTPUT/'browser-codecs.json').write_text(json.dumps(support,indent=2))
                     page.locator('#token').fill((state/'web-token').read_text().strip())
                     page.locator('form button').click()
                     deadline=time.monotonic()+20
@@ -55,8 +63,9 @@ with tempfile.TemporaryDirectory(prefix='diplay-web-smoke-') as temporary:
                     audio_peak=page.evaluate('() => {const s=new Float32Array(testAnalyser.fftSize);testAnalyser.getFloatTimeDomainData(s);return Math.max(...s.map(Math.abs));}')
                     assert audio_peak>0.001, 'AudioWorklet did not produce the synthetic tone'
                     assert not errors,errors
-                    metrics=page.evaluate('() => ({frames:videoCount,audio:audioContext.state,codec:configuration.codec})')
+                    metrics=page.evaluate('() => ({frames:videoCount,audio:audioContext.state,codec:configuration.codec,decoderPreference:decoderOptions.hardwareAcceleration})')
                     metrics['audio_peak']=audio_peak
+                    metrics['browser']=browser.version
                     (OUTPUT/'browser.json').write_text(json.dumps(metrics,indent=2))
                 finally:
                     page.screenshot(path=str(OUTPUT/'web-preview.png'))

@@ -62,12 +62,15 @@ jobs:
           assert s['audio_rtp_packets']>20, s
           assert not s['physical_session_observed'], s
           PY
-      - name: Browser WebCodecs smoke
+      - name: Browser WebCodecs smoke (codec-enabled Chrome)
         if: ${{ !cancelled() && steps.core.outcome == 'success' && matrix.arch == 'x86_64' }}
         run: |
           python3 -m venv /tmp/browser-venv
           /tmp/browser-venv/bin/pip -q install playwright
-          /tmp/browser-venv/bin/python -m playwright install --with-deps chromium
+          /tmp/browser-venv/bin/python -m playwright install-deps chromium
+          if ! command -v google-chrome >/dev/null; then
+            /tmp/browser-venv/bin/python -m playwright install chrome
+          fi
           /tmp/browser-venv/bin/python desktop/tests/browser_smoke.py
       - name: Inspect pinned upstream APK identity (not uploaded)
         if: ${{ !cancelled() && steps.core.outcome == 'success' && matrix.arch == 'x86_64' }}
