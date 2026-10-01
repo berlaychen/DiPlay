@@ -36,7 +36,9 @@ This installs apt packages only. It does not change firmware, boot settings, AP/
 cat ~/.local/state/diplay/web-token
 ```
 
-Paste the token into the browser and click Enable sound. Use a Chromium build with H.264 WebCodecs support first. Hardware decoding is browser/driver dependent. The backend does not decode/re-encode video for Web; audio is decoded to 48 kHz stereo PCM.
+Paste the token into the browser and click Enable sound. Use a Chromium build with H.264 WebCodecs support first. Hardware decoding is browser/driver dependent. The backend does not decode/re-encode video for Web; audio is currently decoded to 48 kHz stereo PCM in Linux for the conservative compatibility path.
+
+The Web frontend/backend split was also cross-checked against LoopLink's `carplay-browser` branch. We keep the same security boundary—credentials and CarPlay session state stay server-side, compressed H.264 goes to the browser, and touch/microphone come back through an allowlisted channel—while retaining Linux wireless BlueZ/AP ownership instead of LoopLink's macOS USB helper. See [WEB_PROTOCOL.md](WEB_PROTOCOL.md) for the platform-neutral contract.
 
 ## The APK's built-in authentication is supported
 
@@ -144,4 +146,4 @@ gradle -p desktop fatJar coreTest
 PYTHONPATH=desktop/python python3 -m pytest -q desktop/tests
 ```
 
-CI builds/tests on x86_64 and ARM64, checks native synthetic playback, runs a real Chromium smoke on x86_64, and produces source-inclusive packages. No runtime accessory credentials are published. See [VALIDATION.md](VALIDATION.md), [ARCHITECTURE.md](ARCHITECTURE.md) and [NOTICE.md](NOTICE.md).
+CI builds/tests on x86_64 and ARM64, checks native synthetic playback, runs a real Chromium smoke on x86_64, and produces source-inclusive packages. No runtime accessory credentials are published. See [VALIDATION.md](VALIDATION.md), [ARCHITECTURE.md](ARCHITECTURE.md), [WEB_PROTOCOL.md](WEB_PROTOCOL.md) and [NOTICE.md](NOTICE.md).
