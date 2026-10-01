@@ -2,6 +2,17 @@ package dev.diplay.desktop
 
 fun main(args: Array<String>) {
     if (args.contentEquals(arrayOf("--self-test"))) { selfTest(); return }
+    if (args.size == 2 && args[0] == "--check-identity") {
+        try {
+            val client = com.shilapi.xcertplay.mfi.LocalMfiAuthenticationClient.load(java.io.File(args[1]))
+            check(client.signChallenge(ByteArray(32)).size == 64)
+            println("PASS JVM local P-256 certificate/key loading and signing; iPhone trust NOT tested")
+        } catch (error: Exception) {
+            System.err.println("Identity check failed (${error.javaClass.simpleName}); no credential data logged")
+            kotlin.system.exitProcess(2)
+        }
+        return
+    }
     val wire = Wire(System.`in`, System.out)
     var receiver: Receiver? = null
     var failed = false

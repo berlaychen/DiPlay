@@ -36,6 +36,8 @@ def main():
                     if path.resolve() in (destination.resolve(),Path(temporary).resolve()):continue
                     archive.add(path,'DiPlay/'+str(relative),recursive=False)
             if args.with_identity:
+                folder=tarfile.TarInfo('DiPlay/desktop/runtime-identity')
+                folder.type=tarfile.DIRTYPE;folder.mode=0o700;archive.addfile(folder)
                 for name in FILES:
                     source=args.with_identity/name
                     info=archive.gettarinfo(str(source),'DiPlay/desktop/runtime-identity/'+name);info.mode=0o600

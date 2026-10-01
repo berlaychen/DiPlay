@@ -3,10 +3,9 @@ import json
 import logging
 import signal
 import sys
-import time
 from pathlib import Path
 from .config import Config, ROOT
-from .protocol import EventQueue, validate_control
+from .protocol import EventQueue
 
 
 def doctor(config):
@@ -30,6 +29,13 @@ def doctor(config):
 class Application:
     def __init__(self, config, args):
         from gi.repository import GLib
+        # Import GTK overrides before gtksink can create/cache its GtkWidget type.
+        # Doing this after Media() breaks PyGObject's translate_coordinates override.
+        if config.mode == 'native':
+            from .native import NativeFrontend
+            from gi.repository import Gtk
+            if not Gtk.init_check()[0]:
+                raise RuntimeError('Native mode requires a working X11 or Wayland display')
         from .media import Media
         self.GLib = GLib
         self.config, self.args = config, args
@@ -50,7 +56,6 @@ class Application:
             self.web.start()
         self.media = Media(config, self.control, self.emit, self.web.push if self.web else None)
         if config.mode == 'native':
-            from .native import NativeFrontend
             self.frontend = NativeFrontend(self.media, self.control, self.stop)
         if args.demo:
             from .demo import Demo
@@ -77,7 +82,6 @@ class Application:
             self.GLib.idle_add(self.stop)
 
     def control(self, value):
-        # May be called from browser/GStreamer/BlueZ threads.
         if value.get('op') == 'reconnect':
             self.GLib.idle_add(self.reconnect)
         elif self.core:
@@ -200,9 +204,10 @@ def main():
         application = Application.__new__(Application)
         application.__init__(config, args)
         return application.run()
-    except Exception as error:
-        logging.error('Startup failed: %s', error)
+    except Exception:
+        logging.exception('Startup failed')
         if application and hasattr(application, 'stats'):
+            application.stats['errors'] += 1
             application.close()
         return 2
 

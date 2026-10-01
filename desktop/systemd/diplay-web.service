@@ -1,7 +1,6 @@
 # User unit example; replace absolute paths. Does not set up AP/pairing.
 [Unit]
 Description=DiPlay Linux Web receiver preview
-After=default.target
 [Service]
 Type=simple
 ExecStart=/ABSOLUTE/PATH/TO/DiPlay/desktop/diplay --mode web --config /ABSOLUTE/PATH/TO/config.toml

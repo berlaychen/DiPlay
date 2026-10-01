@@ -8,7 +8,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: linux-port-${{ github.ref }}
+  group: linux-port-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 jobs:
   linux:
@@ -22,6 +22,9 @@ jobs:
             arch: arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,6 +45,7 @@ jobs:
           unzip -q /tmp/kotlin.zip -d /tmp/kotlin
           echo /tmp/kotlin/kotlinc/bin >> "$GITHUB_PATH"
       - name: Compile portable core and run protocol checks
+        id: core
         run: python3 desktop/build.py test
       - name: Python, identity import and Web security tests
         run: PYTHONPATH=desktop/python /usr/bin/python3 -m pytest -q desktop/tests
@@ -59,19 +63,21 @@ jobs:
           assert not s['physical_session_observed'], s
           PY
       - name: Browser WebCodecs smoke
-        if: matrix.arch == 'x86_64'
+        if: ${{ !cancelled() && steps.core.outcome == 'success' && matrix.arch == 'x86_64' }}
         run: |
           python3 -m venv /tmp/browser-venv
           /tmp/browser-venv/bin/pip -q install playwright
           /tmp/browser-venv/bin/python -m playwright install --with-deps chromium
           /tmp/browser-venv/bin/python desktop/tests/browser_smoke.py
       - name: Inspect pinned upstream APK identity (not uploaded)
-        if: matrix.arch == 'x86_64'
+        if: ${{ !cancelled() && steps.core.outcome == 'success' && matrix.arch == 'x86_64' }}
         run: |
           umask 077
+          mkdir -p desktop/build/smoke
+          trap 'rm -rf /tmp/diplay-auth-check' EXIT
           desktop/diplay-auth fetch-upstream --accept-experimental-identity --destination /tmp/diplay-auth-check > desktop/build/smoke/upstream-identity.json
           desktop/diplay-auth check --directory /tmp/diplay-auth-check
-          rm -rf /tmp/diplay-auth-check
+          java -cp desktop/build/diplay-core.jar:desktop/build/bcprov.jar dev.diplay.desktop.MainKt --check-identity /tmp/diplay-auth-check
       - name: Package preview (source and importer, no private credentials)
         run: |
           mkdir -p /tmp/package/DiPlay
