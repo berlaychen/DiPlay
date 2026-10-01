@@ -16,7 +16,8 @@ function harness() {
       textContent: '', value: '', hidden: false, checked: false, width: 640, height: 360,
       getContext: () => context, querySelector: name => element(id + '/' + name),
       getBoundingClientRect: () => ({ left: 0, top: 0, width: 640, height: 360 }),
-      setPointerCapture() {},
+      setPointerCapture() {}, releasePointerCapture() {},
+      addEventListener() {}, removeEventListener() {}, showModal() {}, close() {},
     });
     return elements.get(id);
   }
@@ -31,7 +32,7 @@ function harness() {
     fail() { this.state = 'closed'; this.callbacks.error(new Error('synthetic device loss')); }
   }
   const globals = {
-    document: { getElementById: element, querySelectorAll: () => [], documentElement: {} },
+    document: { getElementById: element, querySelectorAll: () => [], documentElement: {}, addEventListener() {}, removeEventListener() {}, querySelector: () => null },
     window: { VideoDecoder: Codec, addEventListener() {} }, VideoDecoder: Codec,
     EncodedVideoChunk: class { constructor(options) { Object.assign(this, options); } },
     WebSocket: { OPEN: 1 }, isSecureContext: true,
@@ -42,6 +43,7 @@ function harness() {
   };
   const sandbox = vm.createContext(globals);
   const run = script => vm.runInContext(script, sandbox);
+  run(fs.readFileSync(path.join(__dirname, '../web/input.js'), 'utf8'));
   run(source);
   run('ws={readyState:WebSocket.OPEN,send:sendTest};');
   return {

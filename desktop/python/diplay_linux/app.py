@@ -3,9 +3,13 @@ import json
 import logging
 import signal
 import sys
+import threading
+import time
 from pathlib import Path
 from .config import Config, ROOT
-from .protocol import EventQueue
+from .protocol import EventQueue, validate_control
+from .supervisor import Supervisor
+from .preferences import Preferences
 
 
 def doctor(config):
@@ -49,6 +53,14 @@ class Application:
         self.config, self.args = config, args
         self.loop = GLib.MainLoop()
         self.queue = EventQueue()
+        self.drain_lock = threading.Lock()
+        self.drain_pending = False
+        self.supervisor = Supervisor(config.document['connection'])
+        self.recovery_state = None
+        self.last_presentation = -100.0
+        self.last_reconnect = -100.0
+        self.pending_controls = {}
+        self.control_pending = False
         self.core = self.radio = self.usb = self.frontend = self.web = None
         self.generation = 0
         self.media = None
@@ -57,7 +69,8 @@ class Application:
         self.connected_once = False
         self.stats = {'events': 0, 'errors': 0, 'mode': config.mode, 'demo': args.demo, 'transport': config.transport}
         config.prepare_private_state()
-        self.drain_source = GLib.timeout_add(5, self.drain)
+        self.preferences = Preferences(config)
+        self.retry_source = None
         if config.mode == 'web':
             from .web import WebFrontend
             self.web = WebFrontend(config, self.control, self.web_microphone,
@@ -67,15 +80,45 @@ class Application:
         if config.mode == 'native':
             self.frontend = NativeFrontend(self.media, self.control, self.stop)
         if args.demo:
-            from .demo import Demo
-            self.core = Demo(config, self.emit)
-            self.core.start()
+            self._start_demo()
         else:
-            self.start_connection()
+            self.supervisor.begin(manual=True)
+            self._start_safely()
+            self.retry_source = GLib.timeout_add_seconds(1, self._retry_tick)
+        self.emit(self.preferences.event())
         if args.duration:
             GLib.timeout_add(int(args.duration * 1000), self.stop)
         for signum in (signal.SIGTERM, signal.SIGINT):
             GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signum, self.stop)
+
+    def _start_demo(self):
+        from .demo import Demo
+        generation = self.generation
+        self.core = Demo(self.config, lambda e: self.emit(dict(e, _generation=generation)))
+        self.core.start()
+
+    def _start_safely(self):
+        try:
+            self.start_connection()
+        except (ValueError, FileNotFoundError, PermissionError) as error:
+            self.supervisor.failed(permanent=True)
+            self.emit(dict(event='error', component='setup', message=str(error)))
+        except Exception as error:
+            self.supervisor.failed()
+            self.emit(dict(event='error', component='connection', message=str(error)))
+
+    def _retry_tick(self):
+        if self.stopping:
+            return False
+        if self.supervisor.tick():
+            self.reconnect(manual=False)
+        snapshot = self.supervisor.snapshot()
+        # No per-second countdown traffic; publish only state transitions/attempts.
+        signature = snapshot['state'], snapshot['attempt']
+        if signature != self.recovery_state:
+            self.recovery_state = signature
+            self.emit(snapshot)
+        return True
 
     def start_connection(self):
         """Frontend and phone transport are independent choices, sharing one protocol core."""
@@ -103,6 +146,10 @@ class Application:
     def emit(self, event):
         try:
             self.queue.push(event)
+            with self.drain_lock:
+                if not self.stopping and not self.drain_pending:
+                    self.drain_pending = True
+                    self.GLib.idle_add(self.drain)
         except BufferError:
             logging.error('Broker queue overflow')
             self.exit_code = 2
@@ -110,16 +157,82 @@ class Application:
 
     def control(self, value):
         if value.get('op') == 'reconnect':
-            self.GLib.idle_add(self.reconnect)
+            self._queue_local_control('reconnect', dict(op='reconnect'))
+        elif value.get('op') in ('display_preset', 'volume', 'presentation'):
+            clean = validate_control(value)
+            self._queue_local_control(clean.get('role', clean['op']), clean)
         elif self.core:
-            self.core.send(value)
+            if value.get('op') == 'disconnect':
+                self._queue_local_control('disconnect', value)
+            else:
+                self.core.send(value)
 
-    def reconnect(self):
+    def _queue_local_control(self, key, value):
+        with self.drain_lock:
+            self.pending_controls[key] = value
+            if not self.control_pending:
+                self.control_pending = True
+                self.GLib.idle_add(self._apply_local_controls)
+
+    def _apply_local_controls(self):
+        with self.drain_lock:
+            values = self.pending_controls
+            self.pending_controls = {}
+            self.control_pending = False
+        if self.stopping:
+            return False
+        now = time.monotonic()
+        if any(v['op'] == 'disconnect' for v in values.values()):
+            self.supervisor.pause()
+            if self.core:
+                self.core.send(dict(op='disconnect'))
+            return False
+        updates = [v for v in values.values() if v['op'] in ('display_preset', 'volume', 'presentation')]
+        if updates and now - self.last_presentation >= 1:
+            self.last_presentation = now
+            # Gain changes first: a display change may rebuild the session.
+            for value in sorted(updates, key=lambda v: v['op'] == 'display_preset'):
+                self._presentation(value)
+        elif updates:
+            self.emit(dict(event='diagnostic', component='preferences', message='Settings changed too quickly; wait one second and Apply again'))
+            self.emit(self.preferences.event())
+        if 'reconnect' in values and now - self.last_reconnect >= 2:
+            self.reconnect()
+        return False
+
+    def _presentation(self, value):
+        if self.stopping:
+            return False
+        try:
+            old_video = dict(self.config.document['video'])
+            changed = self.preferences.update(value)
+            if changed and old_video != self.config.document['video']:
+                if self.frontend:
+                    self.frontend.release_input()
+                if self.args.demo:
+                    self.generation += 1
+                    self.core.close()
+                    self.media.reset_session()
+                    self._start_demo()
+                else:
+                    self.reconnect()
+            if changed:
+                self.media._duck()
+            self.emit(self.preferences.event())
+        except Exception as error:
+            self.emit(dict(event='error', component='preferences', message=str(error)))
+        return False
+
+    def reconnect(self, manual=True):
+        self.last_reconnect = time.monotonic()
         if self.stopping:
             return False
         if self.args.demo:
             self.core.send(dict(op='keyframe'))
         else:
+            self.supervisor.begin(manual=manual)
+            if self.frontend:
+                self.frontend.release_input()
             # Invalidate old queued callbacks before terminating transports/JVM. The GUI
             # and browser stay alive, while no stale USB EOF can kill the new session.
             self.generation += 1
@@ -128,11 +241,7 @@ class Application:
                     obj.close()
             self.radio = self.usb = self.core = None
             self.media.reset_session()
-            try:
-                self.start_connection()
-            except Exception as error:
-                self.emit(dict(event='error', component='connection', message=str(error)))
-                self.emit(dict(event='status', state='reconnect_required'))
+            self._start_safely()
         return False
 
     def web_microphone(self, key, data):
@@ -149,9 +258,13 @@ class Application:
     def web_connected(self):
         if self.media:
             self.media.web_connected()
+        self.emit(self.preferences.event())
+        self.emit(self.supervisor.snapshot())
         return False
 
     def drain(self):
+        with self.drain_lock:
+            self.drain_pending = False
         events, resync = self.queue.drain()
         if resync and self.media:
             self.media.resync()
@@ -163,6 +276,15 @@ class Application:
                 continue
             self.stats['events'] += 1
             kind = event.get('event')
+            if not self.args.demo:
+                self.supervisor.observe(event)
+                state = event.get('state', '')
+                if kind == 'status' and state in ('disconnected', 'transport_error',
+                        'usb_disconnected_reconnect_required', 'usb_error_reconnect_required'):
+                    self.supervisor.failed()
+                elif kind == 'error' and event.get('component') in (
+                        'connection', 'usb', 'iap2-usb', 'iap2-bluetooth', 'iap2-wifi'):
+                    self.supervisor.failed()
             try:
                 if kind == 'usb_prepared' and self.usb:
                     self.usb_prepared(event['facts'])
@@ -200,17 +322,23 @@ class Application:
                 self.stats['errors'] += 1
                 logging.exception('Component failed: %s', kind)
                 self.emit(dict(event='fatal', message=f'{kind}: {type(error).__name__}'))
-        return not self.stopping
+        return False  # One-shot idle source; the next event schedules another drain.
 
     def stop(self):
         if self.stopping:
             return False
         self.stopping = True
+        self.supervisor.pause()
         self.loop.quit()
         return False
 
     def close(self):
         self.stopping = True
+        if getattr(self, 'retry_source', None):
+            self.GLib.source_remove(self.retry_source)
+            self.retry_source = None
+        if getattr(self, 'frontend', None):
+            self.frontend.release_input()
         for obj in (self.radio, self.usb, self.core, self.media, self.web):
             if obj:
                 try:

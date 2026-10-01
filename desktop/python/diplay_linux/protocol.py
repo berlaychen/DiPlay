@@ -76,6 +76,9 @@ def validate_control(value):
     if not isinstance(value, dict):
         raise ValueError('Control must be an object')
     op = value.get('op')
+    if op in ('display_preset', 'volume', 'presentation'):
+        from .preferences import validate_preference
+        return validate_preference(value)
     if op == 'touch':
         contacts = value.get('contacts')
         if not isinstance(contacts, list) or not 1 <= len(contacts) <= 2:

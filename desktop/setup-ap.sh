@@ -10,6 +10,8 @@ exec /usr/bin/python3 - "$1" <<'PY'
 import re, subprocess, sys, tomllib
 from pathlib import Path
 cfg = tomllib.loads(Path(sys.argv[1]).read_text())['network']
+if cfg.get('topology', 'ap') != 'ap':
+    raise SystemExit('External AP selected; this helper will not change the network')
 interface, ssid, password = cfg['interface'], cfg['ssid'], cfg['password']
 channel = cfg.get('channel', 36)
 if not re.fullmatch(r'[a-zA-Z0-9_.:-]{1,15}', interface): raise SystemExit('Invalid interface')

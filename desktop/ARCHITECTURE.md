@@ -41,4 +41,8 @@ JVM owns protocol sessions. GLib owns BlueZ/Avahi, GTK and GStreamer lifecycle. 
 
 ## Deferred
 
-Windows adapters; BYD APIs; native full multitouch UI; automatic pairing/AP; zero-copy output; validated unattended vehicle deployment. Source presence is not implementation or validation of those features.
+Windows adapters; BYD APIs; automatic pairing/AP; zero-copy output; validated unattended vehicle deployment. Source presence is not implementation or validation of those features.
+
+## Low-resource controls
+
+[LOW_RESOURCE.md](LOW_RESOURCE.md) documents the event-driven broker, finite reconnect policy, shared atomic presentation preferences and stable two-slot input. These are shared by both transports/frontends, not a replacement macOS backend.

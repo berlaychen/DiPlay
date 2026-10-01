@@ -25,6 +25,8 @@ class Config:
         connection = self.document.setdefault('connection', {})
         if connection.setdefault('transport', 'wireless') not in ('wired', 'wireless'):
             raise ValueError('connection.transport must be wired or wireless')
+        from .supervisor import Supervisor
+        Supervisor(connection)  # Validate even when this is a demo or doctor invocation.
         video = self.document.setdefault('video', {})
         for key, default, low, high in (('width', 960, 320, 1920), ('height', 540, 240, 1200)):
             value = video.setdefault(key, default)
@@ -65,9 +67,11 @@ class Config:
 
     def network_settings(self):
         net = self.document.get('network', {})
+        if net.get('topology', 'ap') not in ('ap', 'external'):
+            raise ValueError('network.topology must be ap or external')
         iface = net.get('interface', '')
         if not IFACE.fullmatch(iface):
-            raise ValueError('Set network.interface to the dedicated AP interface')
+            raise ValueError('Set network.interface to the receiver interface on the CarPlay LAN')
         phone = net.get('phone', '')
         if not MAC.fullmatch(phone):
             raise ValueError('Set network.phone to the paired iPhone Bluetooth address')

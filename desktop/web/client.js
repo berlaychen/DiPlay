@@ -1,7 +1,8 @@
 'use strict';
 const $=id=>document.getElementById(id),canvas=$('screen'),context=canvas.getContext('2d',{alpha:false});
 let ws,decoder,decoderOptions,configuration,waitingKey=true,videoCount=0,audioContext,playback,micStream,micNode,micSource,micMute,micId=null;
-let codecEpoch=0,decoderRecoveries=0,recoveryTimer=null;
+let codecEpoch=0,decoderRecoveries=0,recoveryTimer=null,lastCounterUpdate=0;
+let inputEnabled=false,presentation=null;
 function diagnostic(text){$('diagnostic').textContent=text;}
 function send(value){if(ws?.readyState===WebSocket.OPEN)ws.send(JSON.stringify(value));}
 function stopMicrophone(){micSource?.disconnect();micNode?.disconnect();micMute?.disconnect();micStream?.getTracks().forEach(t=>t.stop());micStream=micSource=micNode=micMute=null;micId=null;}
@@ -33,6 +34,7 @@ async function startMicrophone(id){
 // close() is terminal in WebCodecs, including errors reported by the codec.
 // Never reuse a failed decoder or allow an old async callback to repaint a new session.
 function stopVideo(){
+  input.release();
   codecEpoch++;clearTimeout(recoveryTimer);recoveryTimer=null;
   if(decoder&&decoder.state!=='closed')decoder.close();
   decoder=null;decoderOptions=null;configuration=null;waitingKey=true;decoderRecoveries=0;
@@ -74,7 +76,8 @@ async function configure(m,recovery=false){
       if(epoch!==codecEpoch||decoder!==instance)return;
       if(canvas.width!==frame.displayWidth)canvas.width=frame.displayWidth;
       if(canvas.height!==frame.displayHeight)canvas.height=frame.displayHeight;
-      context.drawImage(frame,0,0);$('placeholder').hidden=true;$('counter').textContent=(++videoCount)+' frames';
+      context.drawImage(frame,0,0);$('placeholder').hidden=true;videoCount++;
+      const now=performance.now();if(videoCount===1||now-lastCounterUpdate>=1000){$('counter').textContent=videoCount+' frames';lastCounterUpdate=now;}
       if(videoCount===1)send({op:'rendered'});
     }finally{frame.close();}
   },error:error=>{if(decoder===instance)recoverVideo(error,epoch);}});
@@ -85,7 +88,20 @@ async function configure(m,recovery=false){
 }
 function receive(m,data){
   if(m.event==='authorized'){$('login').hidden=true;return;}
-  if(m.event==='status'){$('state').textContent=(m.transport?m.transport.toUpperCase()+' | ':'')+m.state;return;}
+  if(m.event==='status'){
+    $('state').textContent=(m.transport?m.transport.toUpperCase()+' | ':'')+m.state;
+    if(m.state==='connected'||m.state.startsWith('DEMO'))inputEnabled=true;
+    else if(['disconnected','transport_error','preparing_usb','waiting_for_phone','usb_error_reconnect_required','usb_disconnected_reconnect_required'].includes(m.state)){input.release();inputEnabled=false;}
+    return;
+  }
+  if(m.event==='preferences'){
+    presentation=m;
+    if(!$('settings').open)fillSettings();
+    return;
+  }
+  if(m.event==='recovery'&&['backoff','blocked'].includes(m.state)){
+    diagnostic(m.state==='backoff'?'Phone retry scheduled (attempt '+m.attempt+'/'+m.limit+')':'Automatic retries stopped; check setup then Reconnect');return;
+  }
   if(m.event==='video_config'){configure(m).catch(e=>diagnostic(e.message));return;}
   if(m.event==='video'&&data&&decoder?.state==='configured'){
     try{
@@ -116,23 +132,29 @@ $('login').querySelector('form').onsubmit=event=>{
       receive(JSON.parse(new TextDecoder().decode(bytes.subarray(4,4+size))),bytes.subarray(4+size));
     }catch(e){diagnostic('Stream: '+e.message);}
   };
-  ws.onclose=event=>{if(socket!==ws)return;$('state').textContent='Disconnected';$('login').hidden=false;$('error').textContent=event.reason||'Receiver disconnected';stopMicrophone();playback?.port.postMessage({op:'reset'});stopVideo();};
+  ws.onclose=event=>{if(socket!==ws)return;$('state').textContent='Disconnected';$('login').hidden=false;$('error').textContent=event.reason||'Receiver disconnected';input.release();inputEnabled=false;stopMicrophone();playback?.port.postMessage({op:'reset'});stopVideo();};
 };
 $('audio').onclick=()=>enableAudio().catch(e=>diagnostic(e.message));
 $('mic').onchange=()=>{if(!$('mic').checked)stopMicrophone();};
 $('fullscreen').onclick=()=>{if(document.fullscreenElement)document.exitFullscreen();else document.documentElement.requestFullscreen().catch(e=>diagnostic(e.message));};
 $('reconnect').onclick=()=>send({op:'reconnect'});
 for(const button of document.querySelectorAll('[data-key]'))button.onclick=()=>send({op:'key',key:button.dataset.key});
-let dragging=false,lastPoint={x:0,y:0},lastMove=0;
-function contact(event,down){
-  const rect=canvas.getBoundingClientRect(),ratio=canvas.width/canvas.height;
-  let width=rect.width,height=width/ratio;if(height>rect.height){height=rect.height;width=height*ratio;}
-  const x=(event.clientX-rect.left-(rect.width-width)/2)/width,y=(event.clientY-rect.top-(rect.height-height)/2)/height;
-  lastPoint={x:Math.max(0,Math.min(1,x)),y:Math.max(0,Math.min(1,y))};
-  send({op:'touch',contacts:[{...lastPoint,down}]});
+// Only motion is coalesced, with two fixed contact slots and edge release on blur.
+const input=new DiPlayInput(canvas,send,()=>inputEnabled&&ws?.readyState===WebSocket.OPEN&&!$('settings').open);
+const roles=['master','media','guidance','speech','telephony'];
+function fillSettings(){
+  if(!presentation)return;
+  $('preset').value=presentation.preset;
+  for(const role of roles)$('volume-'+role).value=Math.round(presentation.volumes[role]*100);
 }
-canvas.onpointerdown=event=>{if(dragging)return;dragging=true;canvas.setPointerCapture(event.pointerId);contact(event,true);};
-canvas.onpointermove=event=>{if(dragging&&performance.now()-lastMove>25){lastMove=performance.now();contact(event,true);}};
-canvas.onpointerup=event=>{if(dragging){contact(event,false);dragging=false;}};
-canvas.onpointercancel=()=>{send({op:'touch',contacts:[{...lastPoint,down:false}]});dragging=false;};
-window.addEventListener('blur',()=>{if(dragging){send({op:'touch',contacts:[{...lastPoint,down:false}]});dragging=false;}});
+$('settings-open').onclick=()=>{input.release();fillSettings();$('settings').showModal();};
+$('settings-close').onclick=()=>$('settings').close();
+$('settings-apply').onclick=()=>{
+  if(!presentation)return;
+  const update={op:'presentation',volumes:{}};
+  for(const role of roles)update.volumes[role]=Number($('volume-'+role).value)/100;
+  const preset=$('preset').value;
+  if(['480p','540p','720p'].includes(preset))update.preset=preset;
+  send(update);
+  $('settings').close();
+};

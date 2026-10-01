@@ -12,3 +12,5 @@ nav {justify-content:center} label {display:flex; align-items:center; gap:8px} f
 form {width:min(90vw,480px); padding:28px; border:1px solid #476581; border-radius:16px; background:#132131} form p {line-height:1.6} form input {width:100%; margin:8px 0 16px}
 #error {color:#ffa7a7} h1 {font-size:23px} body:fullscreen canvas {max-height:calc(100dvh - 150px)}
 @media(max-width:600px){header,nav,footer{gap:6px;padding:7px} nav button{padding:8px} small{display:none}}
+
+dialog {color:inherit;background:#132131;border:1px solid #476581;border-radius:10px;max-width:90vw} dialog::backdrop {background:#07101acc} dialog label {margin:12px 0;justify-content:space-between} select {font:inherit;padding:8px} dialog input[type=range] {width:65%}

@@ -58,8 +58,12 @@ class Core:
 
     def _stderr(self):
         # Core deliberately redacts upstream protocol/credential log strings.
-        for line in self.process.stderr:
-            logging.info('core: %s', line.decode(errors='replace').strip())
+        try:
+            for line in self.process.stderr:
+                logging.info('core: %s', line.decode(errors='replace').strip())
+        except (OSError, ValueError):
+            if not self.closed.is_set():
+                logging.error('Core log pipe closed unexpectedly')
 
     def close(self):
         if self.closed.is_set():
@@ -74,3 +78,7 @@ class Core:
             self.process.wait(timeout=3)
         except subprocess.TimeoutExpired:
             self.process.kill(); self.process.wait(timeout=2)
+        finally:
+            for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
+                if stream:
+                    stream.close()

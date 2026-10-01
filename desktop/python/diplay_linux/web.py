@@ -13,7 +13,7 @@ from aiohttp import web, WSMsgType
 from .config import ROOT
 from .protocol import validate_control
 
-ASSETS = {'/': 'index.html', '/client.js': 'client.js', '/audio-worklet.js': 'audio-worklet.js', '/style.css': 'style.css'}
+ASSETS = {'/': 'index.html', '/client.js': 'client.js', '/input.js': 'input.js', '/audio-worklet.js': 'audio-worklet.js', '/style.css': 'style.css'}
 
 def envelope(event):
     header = {k: v for k, v in event.items() if k != 'data'}
@@ -138,7 +138,7 @@ class WebFrontend:
             await asyncio.gather(sender, return_exceptions=True)
             self.ws = self.queue = None
             self.byte_count = 0
-            self.control(dict(op='touch', contacts=[dict(x=0.0, y=0.0, down=False)]))
+            self.control(dict(op='touch', contacts=[dict(x=0.0, y=0.0, down=False) for _ in range(2)]))
             self.microphone(-1, b'')
         return ws
 

@@ -1,6 +1,6 @@
 # DiPlay Linux: native + backend/Web frontend
 
-[繁體中文](README.zh-TW.md)
+[繁體中文](README.zh-TW.md) | [Low-resource integration](LOW_RESOURCE.md)
 
 Two Linux entry points share the existing DiPlay/xcertplay Kotlin protocol core:
 
@@ -28,8 +28,8 @@ interface. It does **not** require Bluetooth, AP credentials, Wi-Fi or a remote
 server when local authentication is selected. See [USB.md](USB.md) for explicit
 USB preparation, cable/host-port requirements and complete commands.
 
-Not implemented: Windows, BYD HUD/vehicle APIs, automatic AP/pairing or a native
-settings editor. The backend/Web split is real, not a browser-only USB receiver.
+Not implemented: Windows, BYD HUD/vehicle APIs or automatic AP/pairing.
+Native and Web now share low-resource display presets, stream gains and bounded reconnect; see [LOW_RESOURCE.md](LOW_RESOURCE.md). The backend/Web split is real, not a browser-only USB receiver.
 
 ## Install dependencies and test the display
 
@@ -169,7 +169,7 @@ Audio supports LPCM/AAC-LC/Opus RTP. Native uses system-default devices, prefera
 
 Loopback is the default. For a remote browser, tunnel port 8765 over SSH to localhost, or configure non-loopback binding with `tls_certificate`, `tls_key`, `allowed_origin` (exact `https://host:port`, no path). Use HTTPS/localhost for WebCodecs and microphone. One controller, token/Host/Origin checks, strict control allowlist; no open CORS or unauthenticated LAN control.
 
-Queues are bounded at IPC, media, WebSocket and AudioWorklet boundaries. Overflow requests a new keyframe or disconnects a slow viewer, rather than accumulating stale navigation. The browser UI supports single-pointer touch, Home, Back and Siri. Neither frontend claims full multi-touch gesture validation.
+Queues are bounded at IPC, media, WebSocket and AudioWorklet boundaries. Overflow requests a new keyframe or disconnects a slow viewer, rather than accumulating stale navigation. Both frontends support two stable contact slots, Home, Back and Siri. Touch moves are coalesced; edges are immediate. This is not physical multi-touch gesture validation.
 
 Private state lives under `$XDG_STATE_HOME/diplay` (usually `~/.local/state/diplay`). The receiver pairing key and Web token are different from the accessory identity. Upstream packet/key logging is suppressed. No automatic telemetry upload.
 

@@ -32,3 +32,20 @@ The earlier x86_64 run reached synthetic pixels/audio but failed when a Playwrig
 string predicate required `eval` under the production CSP. The test now polls a
 function through the browser debugger; CSP was not weakened and decoder recovery
 is still exercised. Inspect the run for this commit before claiming a pass.
+
+## Low-resource integration regression coverage
+
+The integration adds deterministic tests for finite retry/backoff, stable-session
+budget reset, startup timeout, paused/manual recovery, two fixed contact slots,
+fast taps, motion coalescing, one-shot event-driven draining and stale generations.
+Presentation tests cover all four frontend/transport combinations, atomic writes,
+input limits, owner-only files, no-op persistence and external-AP configuration.
+
+The Python suite invokes both Node input and WebCodecs regression suites. When GTK
+and Xvfb are installed (Linux CI), a real GTK/GStreamer synthetic test opens the
+settings dialog, applies 800x480 and master gain, checks actual sink caps and gain,
+and exercises touch edges. Browser smoke applies the same settings through the
+authenticated Web endpoint and checks actual decoded canvas dimensions.
+
+These checks are synthetic. They do not measure T100/Pi CPU/RAM/heat, prove hardware
+decoding, or validate iPhone pairing, telephone audio or physical multi-touch.

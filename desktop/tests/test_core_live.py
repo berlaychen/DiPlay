@@ -42,6 +42,8 @@ def test_jvm_local_identity_and_rtsp_listener(tmp_path):
         assert process.wait(timeout=5)==0
     finally:
         if process.poll() is None:process.kill();process.wait()
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream: stream.close()
 
 
 def test_jvm_wired_listener_and_usb_stream_without_radio_configuration(tmp_path):
@@ -101,3 +103,5 @@ def test_jvm_wired_listener_and_usb_stream_without_radio_configuration(tmp_path)
     finally:
         if process.poll() is None:
             process.kill(); process.wait()
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream: stream.close()

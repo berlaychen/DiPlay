@@ -8,6 +8,7 @@ import gi
 gi.require_version('Gst', '1.0')
 from gi.repository import Gst, GLib
 from .protocol import avc_config
+from .preferences import role_group
 
 Gst.init(None)
 RATES = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350]
@@ -241,8 +242,11 @@ class Media:
 
     def _duck(self):
         priority = any(s[2] in ('telephony', 'speechrecognition', 'alert', 'guidance') for s in self.audio.values())
+        gains = self.config.document['audio'].get('volumes', {})
         for pipeline, source, role, volume in self.audio.values():
-            volume.set_property('volume', 0.3 if priority and role in ('default', 'media') else 1.0)
+            duck = 0.3 if priority and role in ('default', 'media') else 1.0
+            level = gains.get('master', 1.0) * gains.get(role_group(role), 1.0) * duck
+            volume.set_property('volume', level)
 
     def _audio_stop(self, key):
         entry = self.audio.pop(key, None)

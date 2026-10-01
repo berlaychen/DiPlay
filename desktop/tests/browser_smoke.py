@@ -63,6 +63,18 @@ with tempfile.TemporaryDirectory(prefix='diplay-web-smoke-') as temporary:
                     assert page.evaluate('() => context.getImageData(0,0,canvas.width,canvas.height).data.some((x,i)=>i%4!==3&&x>30)')
                     audio_peak=page.evaluate('() => {const s=new Float32Array(testAnalyser.fftSize);testAnalyser.getFloatTimeDomainData(s);return Math.max(...s.map(Math.abs));}')
                     assert audio_peak>0.001, 'AudioWorklet did not produce the synthetic tone'
+                    # Exercise real backend settings and codec renegotiation, not just DOM controls.
+                    page.locator('#settings-open').click()
+                    page.locator('#preset').select_option('480p')
+                    page.locator('#volume-master').evaluate('(el) => { el.value = "50"; }')
+                    page.locator('#settings-apply').click()
+                    display_deadline = time.monotonic() + 20
+                    while not page.evaluate('() => canvas.width === 800 && canvas.height === 480 && videoCount >= 10'):
+                        if time.monotonic() >= display_deadline:
+                            raise RuntimeError('Display preset did not produce actual 800x480 frames')
+                        page.wait_for_timeout(100)
+                    saved = json.loads((state/'presentation.json').read_text())
+                    assert saved['preset'] == '480p' and saved['volumes']['master'] == .5
                     # WebCodecs closes a decoder on terminal errors. Simulate that lifecycle,
                     # then require the real client to recreate it and render more actual AVC.
                     page.evaluate('() => { decoder.close(); recoverVideo(new Error("test: closed decoder")); }')
