@@ -1,0 +1,3 @@
+# Install GI/GTK/GStreamer/dbus-python through the distribution, not pip.
+aiohttp>=3.9,<4
+cryptography>=41

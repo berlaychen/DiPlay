@@ -1,0 +1,29 @@
+# Raspberry Pi 5, 64-bit OS. Pi 5 has no dedicated H.264 hardware decoder.
+name = "DiPlay Linux"
+[video]
+width = 1280
+height = 720
+fps = 30
+decoder = "avdec_h264"
+width_mm = 220
+height_mm = 124
+[audio]
+microphone = false
+[network]
+interface = "wlan0"
+bluetooth_adapter = "hci0"
+phone = "REPLACE_WITH_PAIRED_IPHONE_MAC"
+ssid = "DiPlay-Linux"
+password = "CHANGE-THIS-PASSWORD"
+channel = 36
+address = "10.42.0.1"
+airplay_port = 7000
+[auth]
+mode = "local"
+directory = "~/.config/diplay/identity"
+[web]
+host = "127.0.0.1"
+port = 8765
+
+[connection]
+transport="wireless"

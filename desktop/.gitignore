@@ -1,0 +1,16 @@
+/build/
+/.gradle/
+__pycache__/
+*.pyc
+.pytest_cache/
+/node_modules/
+/playwright-report/
+/test-results/
+/config.local.toml
+/runtime-identity/
+*.pk8
+*.p7b
+*.pem
+*.key
+*.apk
+*.tar.gz

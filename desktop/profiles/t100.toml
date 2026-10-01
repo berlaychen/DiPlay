@@ -1,0 +1,33 @@
+# T100/Z3740/2GB: starting configuration, not measured performance.
+# Copy outside Git and chmod 600 before entering Wi-Fi credentials.
+name = "DiPlay Linux"
+[video]
+width = 960
+height = 540
+fps = 30
+decoder = "auto"
+width_mm = 220
+height_mm = 124
+[audio]
+microphone = false
+[network]
+interface = "wlan0"
+bluetooth_adapter = "hci0"
+phone = "REPLACE_WITH_PAIRED_IPHONE_MAC"
+ssid = "DiPlay-Linux"
+password = "CHANGE-THIS-PASSWORD"
+channel = 36
+address = "10.42.0.1"
+airplay_port = 7000
+[auth]
+# Populated once with desktop/diplay-auth; both modes share this local identity.
+mode = "local"
+directory = "~/.config/diplay/identity"
+# Remote alternative: mode="remote", url="https://...", token_file="/private/token"
+[web]
+host = "127.0.0.1"
+port = 8765
+# LAN access requires TLS and allowed_origin; see README.
+
+[connection]
+transport="wireless"
