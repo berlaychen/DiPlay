@@ -12,5 +12,5 @@ sudo apt-get install --no-install-recommends \
   gstreamer1.0-tools gstreamer1.0-gtk3 gstreamer1.0-plugins-base \
   gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav \
   pipewire pipewire-pulse wireplumber bluez avahi-daemon avahi-utils \
-  network-manager iw iproute2 ffmpeg
-printf '\nDependencies installed. Provision authentication, AP and paired iPhone before live use.\n'
+  network-manager iw iproute2 ffmpeg usbmuxd libimobiledevice-utils python3-usb
+printf '\nDependencies installed. Provision authentication and either USB/NCM or a paired iPhone/AP before live use.\n'

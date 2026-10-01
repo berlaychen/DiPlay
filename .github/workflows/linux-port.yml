@@ -40,14 +40,14 @@ jobs:
             gir1.2-gtk-3.0 gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
             gstreamer1.0-tools gstreamer1.0-gtk3 gstreamer1.0-plugins-base \
             gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav \
-            ffmpeg xvfb xauth libbcprov-java
+            ffmpeg xvfb xauth libbcprov-java usbmuxd libimobiledevice-utils python3-usb
           curl -fLsS https://github.com/JetBrains/kotlin/releases/download/v1.9.24/kotlin-compiler-1.9.24.zip -o /tmp/kotlin.zip
           unzip -q /tmp/kotlin.zip -d /tmp/kotlin
           echo /tmp/kotlin/kotlinc/bin >> "$GITHUB_PATH"
       - name: Compile portable core and run protocol checks
         id: core
         run: python3 desktop/build.py test
-      - name: Python, identity import and Web security tests
+      - name: Python, wired transport, identity and Web security tests
         run: PYTHONPATH=desktop/python /usr/bin/python3 -m pytest -q desktop/tests
       - name: Native synthetic H.264 and PCM smoke
         run: |

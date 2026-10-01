@@ -5,7 +5,7 @@ It is intentionally platform-neutral so the same frontend can later be reused by
 different Linux service implementation.
 
 The design follows the same successful separation demonstrated by LoopLink's
-`carplay-browser` branch, while keeping DiPlay Linux's wireless-first BlueZ/Avahi/AP backend.
+`carplay-browser` branch, while keeping DiPlay Linux's shared wired/wireless backend.
 LoopLink's current desktop branch is macOS/USB-oriented; those platform assumptions are not
 part of this contract.
 
@@ -15,7 +15,7 @@ The **backend owns**:
 
 - iAP2, AirPlay and CarPlay session state
 - accessory authentication and the local/remote MFi provider
-- Bluetooth bootstrap and Wi-Fi handoff
+- Selected transport: Bluetooth/Wi-Fi handoff or USB Carkit/CDC-NCM
 - pairing state and receiver identity
 - CarPlay stream decryption
 - microphone RTP encryption/packetization
@@ -146,8 +146,8 @@ That separation is deliberate:
 - Linux x86_64: ASUS T100 and similar systems
 - Linux arm64: Raspberry Pi 4/5
 - future Windows backend: Media Foundation/WASAPI/WinRT or equivalent
-- future wired Linux backend: a helper stream can provide the same `BlockingDuplexByteStream`
-  seam used by the portable iAP2 core
+- wired Linux backend: the isolated Carkit helper uses the same `BlockingDuplexByteStream`
+  seam as wireless, backed by the selected iPhone's kernel CDC-NCM interface (see USB.md)
 
 ## Validation boundary
 

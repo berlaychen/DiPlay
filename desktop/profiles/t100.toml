@@ -28,3 +28,6 @@ directory = "~/.config/diplay/identity"
 host = "127.0.0.1"
 port = 8765
 # LAN access requires TLS and allowed_origin; see README.
+
+[connection]
+transport="wireless"

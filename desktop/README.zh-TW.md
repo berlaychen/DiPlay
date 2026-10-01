@@ -7,7 +7,7 @@
 | `--mode native` | GTK 3＋GStreamer，沒有 Electron／Android 模擬器 | T100、接螢幕的 Pi |
 | `--mode web` | Linux 處理 CarPlay；瀏覽器 WebCodecs＋AudioWorklet | 同機或另一台裝置顯示 |
 
-目前是 **無線優先的工程預覽版**。Linux USB 有線、Windows、BYD HUD、完整圖形設定頁尚未移植。編譯與合成影音測試不代表真實 iPhone 已連通；開發環境沒有 T100／Pi／iPhone 實機，不能宣稱硬解、Siri、長途及供電已通過驗證。
+目前是 **wired＋wireless 工程預覽版**。原生 GTK 與獨立 Web 前端都共用 Linux 後端，可選擇 USB 有線或 Bluetooth／Wi-Fi AP 無線。**程式已實作不等於真機已驗證**：開發環境沒有 T100／Pi／iPhone，不能宣稱真實 CarPlay、硬解或 Siri 已測試成功。Windows、BYD HUD 及完整圖形設定頁仍未移植。
 
 ## 先測原生／Web 畫面
 
@@ -102,3 +102,33 @@ Pi 改用 `rpi4.toml` 或 `rpi5.toml`。
 WebSocket 檢查 token／Host／Origin，只允許一位操作者，影音佇列設有上限。後端轉送壓縮 H.264，不重新編碼；音訊轉成 PCM，由瀏覽器播放。
 
 必須另外做真機認證、Wi-Fi 交接、畫面、觸控、音樂、導航混音、Siri、來電、重連和長時間測試。本版不以 demo 成功代替這些驗收。詳細範圍見 `VALIDATION.md`。
+
+## USB wired: native / Web
+
+Both frontends now accept `--transport wired`. This path does not require Wi-Fi,
+Bluetooth, AP credentials or Internet when local authentication is selected.
+Use a real USB host/data port (start with the T100 keyboard dock USB-A).
+
+```sh
+./desktop/install-deps.sh
+./desktop/diplay-usb list
+# Explicit preparation may re-enumerate the selected iPhone; never run the GUI as root.
+sudo modprobe cdc_ncm
+sudo ./desktop/diplay-usb prepare --configure --bring-up
+cp desktop/profiles/t100-wired.toml ~/.config/diplay/config.toml
+# Pi: rpi4-wired.toml / rpi5-wired.toml
+chmod 600 ~/.config/diplay/config.toml
+./desktop/diplay --mode native --transport wired --config ~/.config/diplay/config.toml
+# OR:
+./desktop/diplay --mode web --transport wired --config ~/.config/diplay/config.toml
+```
+
+See [USB.md](USB.md) for USB Trust, CDC-NCM, scoped IPv6, permissions, timeouts,
+reconnect and validation limits. The Web browser still connects only to the Linux
+backend; it does not directly claim the iPhone USB interface. Runtime is read-only
+by default. USB preparation can be needed again after unplugging/rebooting.
+
+For wireless mode, use the existing `t100.toml` / `rpi4.toml` / `rpi5.toml` and
+`--transport wireless`. 5 GHz is preferred, not a code-level requirement: channel
+6 on a correctly configured 2.4 GHz AP is accepted for testing. Actual iPhone and
+radio compatibility remains a hardware test, not a promise.

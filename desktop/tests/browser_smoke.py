@@ -66,7 +66,13 @@ with tempfile.TemporaryDirectory(prefix='diplay-web-smoke-') as temporary:
                     # WebCodecs closes a decoder on terminal errors. Simulate that lifecycle,
                     # then require the real client to recreate it and render more actual AVC.
                     page.evaluate('() => { decoder.close(); recoverVideo(new Error("test: closed decoder")); }')
-                    page.wait_for_function('decoder?.state === "configured" && videoCount >= 15', timeout=15000)
+                    # Playwright's string polling uses eval and violates production CSP.
+                    # Poll with a function through the debugger; do not weaken script-src.
+                    recovery_deadline = time.monotonic() + 15
+                    while not page.evaluate('() => decoder?.state === "configured" && videoCount >= 15'):
+                        if time.monotonic() >= recovery_deadline:
+                            raise RuntimeError('Decoder recovery timeout: ' + page.locator('#diagnostic').inner_text())
+                        page.wait_for_timeout(100)
                     assert page.evaluate('decoderRecoveries') == 1
                     assert not errors,errors
                     metrics=page.evaluate('() => ({frames:videoCount,audio:audioContext.state,codec:configuration.codec,decoderPreference:decoderOptions.hardwareAcceleration})')

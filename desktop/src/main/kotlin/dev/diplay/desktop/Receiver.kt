@@ -63,6 +63,8 @@ class StateStore(private val directory: Path) {
 /** Linux-neutral CarPlay control/media runtime. Platform operations live in the Python broker. */
 class Receiver(private val wire: Wire, private val settings: Map<String, Any?>) : Closeable {
     private val stopped = AtomicBoolean(false)
+    private val transport = settings.text("transport", "wireless").also { require(it in setOf("wired", "wireless")) }
+    private val wired = transport == "wired"
     private val states = StateStore(Path.of(settings.text("state_dir")))
     private val identity = states.identity()
     private val pairings = states.pairings()
@@ -88,14 +90,15 @@ class Receiver(private val wire: Wire, private val settings: Map<String, Any?>) 
         "remote" -> RemoteMfiAuthenticationClient(settings.text("auth_url"), settings.text("auth_token").ifEmpty { null })
         else -> error("Set auth.mode to local or remote; source builds do not contain an accessory identity")
     }
-    private val endpoint = Iap2WirelessCarPlayEndpoint(
+    private val endpoint = if (wired) null else Iap2WirelessCarPlayEndpoint(
         settings.text("ssid"), settings.text("password"), settings.number("channel", 36),
         Iap2WirelessSecurity.WPA_WPA2, listOf(address.hostAddress!!.substringBefore('%')),
         config.port, config.deviceId, identity.publicKeyHex, config.sourceVersion,
     )
     private val identification = Iap2IdentificationConfig(
         config.deviceName, config.model, config.manufacturer, identity.pairingId, "0.1.0", "1",
-        wireless = Iap2WirelessIdentification(mac, endpoint.ssid),
+        carPlayUsbInterfaceNumber = if (wired) settings.number("usb_interface_number", -1).also { require(it in 0..255) } else 0,
+        wireless = endpoint?.let { Iap2WirelessIdentification(mac, it.ssid) },
         externalAccessoryProtocol = "dev.diplay.desktop",
     )
     private val media = PipeMediaSink(wire)
@@ -105,15 +108,16 @@ class Receiver(private val wire: Wire, private val settings: Map<String, Any?>) 
     private var listener: ServerSocket? = null
     @Volatile private var active: AirPlaySession? = null
     @Volatile private var bt: PipeDuplex? = null
+    @Volatile private var usb: PipeDuplex? = null
     private val handoff = AtomicBoolean(false)
     private val tunnelReady = AtomicBoolean(false)
     private val btGeneration = AtomicInteger(0)
 
-    private fun state(value: String) = wire.send(mapOf("event" to "status", "state" to value))
+    private fun state(value: String) = wire.send(mapOf("event" to "status", "state" to value, "transport" to transport))
 
     fun start() {
         authentication.readCertificate(65525) // Fail before touching Bluetooth, not halfway through pairing.
-        engine.setIapTunnelHandler { stream ->
+        if (!wired) engine.setIapTunnelHandler { stream ->
             if (stopped.get()) false else {
                 val session = Iap2Session.openTunnel(stream)
                 channels += session
@@ -135,8 +139,9 @@ class Receiver(private val wire: Wire, private val settings: Map<String, Any?>) 
                 val session = AirPlaySession(socket, config, identity, pairings, authentication,
                     object : AirPlaySessionListener {
                         override fun onSessionActive(session: AirPlaySession) {
-                            active?.takeIf { it !== session }?.close()
+                            val previous = active
                             active = session
+                            previous?.takeIf { it !== session }?.close()
                             state("connected")
                         }
                         override fun onSessionEnded(session: AirPlaySession) {
@@ -150,7 +155,7 @@ class Receiver(private val wire: Wire, private val settings: Map<String, Any?>) 
                             }
                         }
                         override fun onCommand(session: AirPlaySession, type: String, params: Map<String, Any?>) {
-                            if (type.equals("disableBluetooth", true) || type.equals("disable-bluetooth", true)) {
+                            if (!wired && (type.equals("disableBluetooth", true) || type.equals("disable-bluetooth", true))) {
                                 handoff.set(true); finishHandoff()
                             }
                         }
@@ -161,7 +166,7 @@ class Receiver(private val wire: Wire, private val settings: Map<String, Any?>) 
                 session.start()
             }
         }
-        wire.send(mapOf("event" to "ready", "name" to config.deviceName, "port" to config.port,
+        wire.send(mapOf("event" to "ready", "transport" to transport, "name" to config.deviceName, "port" to config.port,
             "txt" to mapOf("deviceid" to mac, "features" to "0x44540380,0x61", "flags" to "0x4",
                 "model" to config.model, "srcvers" to config.sourceVersion, "protovers" to "1.1",
                 "pi" to identity.pairingId, "pk" to identity.publicKeyHex)))
@@ -171,11 +176,34 @@ class Receiver(private val wire: Wire, private val settings: Map<String, Any?>) 
     private fun runControl(channel: Iap2Session, ready: () -> Unit = {}) {
         try {
             Iap2WirelessControlClient(channel, Iap2MfiAuthenticationClient(authentication)).run(
-                identification, endpoint, timeoutMillis = Iap2WirelessControlClient.NO_TIMEOUT_MILLIS,
+                identification, checkNotNull(endpoint), timeoutMillis = Iap2WirelessControlClient.NO_TIMEOUT_MILLIS,
                 onReady = { state("authenticated"); ready() },
             )
         } finally { channels.remove(channel); runCatching { channel.close() } }
     }
+    private fun runWiredControl(channel: Iap2Session) {
+        try {
+            val endpoint = Iap2WiredCarPlayEndpoint(
+                listOf(address.hostAddress!!.substringBefore('%')), config.port,
+                identity.publicKeyHex, config.sourceVersion, config.deviceId,
+            )
+            Iap2WiredControlClient(channel, Iap2MfiAuthenticationClient(authentication)).run(
+                identification, endpoint, availableCurrentMilliAmps = 0,
+                timeoutMillis = Iap2WiredControlClient.NO_TIMEOUT_MILLIS,
+                onProgress = { if (it == "iap2 authentication accepted") state("authenticated") },
+            )
+        } finally {
+            channels.remove(channel)
+            runCatching { channel.close() }
+            usb?.close(); usb = null
+            sessions.toList().forEach { runCatching { it.close() } }
+            if (!stopped.get()) {
+                wire.send(mapOf("event" to "usb_release"))
+                state("usb_disconnected_reconnect_required")
+            }
+        }
+    }
+
     private fun finishHandoff() {
         if (handoff.get() && tunnelReady.get()) {
             bt?.close(); bt = null
@@ -185,6 +213,7 @@ class Receiver(private val wire: Wire, private val settings: Map<String, Any?>) 
     fun command(value: Map<String, Any?>) {
         when (value.text("op")) {
             "bt_open" -> {
+                require(!wired) { "Bluetooth bootstrap is not part of wired mode" }
                 if (active != null || bt != null) return
                 val pipe = PipeDuplex(wire)
                 bt = pipe
@@ -201,8 +230,20 @@ class Receiver(private val wire: Wire, private val settings: Map<String, Any?>) 
                     }
                 }
             }
-            "bt_data" -> bt?.offer(value["data"] as ByteArray)
-            "bt_closed" -> { bt?.close(); bt = null }
+            "bt_data" -> { require(!wired); bt?.offer(value["data"] as ByteArray) }
+            "bt_closed" -> { require(!wired); bt?.close(); bt = null }
+            "usb_open" -> {
+                require(wired) { "USB bootstrap is not part of wireless mode" }
+                if (usb != null) return
+                val pipe = PipeDuplex(wire, "usb_send")
+                usb = pipe
+                val channel = Iap2Session.open(pipe)
+                channels += channel
+                worker("iap2-usb") { runWiredControl(channel) }
+            }
+            "usb_data" -> { require(wired); usb?.offer(value["data"] as ByteArray) }
+            "usb_closed" -> { require(wired); usb?.close(); usb = null }
+
             "touch" -> {
                 @Suppress("UNCHECKED_CAST")
                 val contacts = value["contacts"] as? List<Map<String, Any?>> ?: return
@@ -228,7 +269,11 @@ class Receiver(private val wire: Wire, private val settings: Map<String, Any?>) 
             "keyframe" -> active?.sendCommand(mapOf("type" to "forceKeyFrame"))
             "rendered" -> media.rendered()
             "mic_packet" -> media.microphonePacket(value.number("id", -1), value["data"] as ByteArray)
-            "disconnect" -> { sessions.toList().forEach { it.close() }; bt?.close(); bt = null }
+            "disconnect" -> {
+                sessions.toList().forEach { it.close() }
+                channels.toList().forEach { it.close() }
+                bt?.close(); bt = null; usb?.close(); usb = null
+            }
             else -> throw IllegalArgumentException("Unknown IPC operation")
         }
     }
@@ -244,7 +289,7 @@ class Receiver(private val wire: Wire, private val settings: Map<String, Any?>) 
         btGeneration.incrementAndGet()
         engine.setIapTunnelHandler(null)
         runCatching { listener?.close() }
-        bt?.close()
+        bt?.close(); usb?.close()
         channels.toList().forEach { runCatching { it.close() } }
         sessions.toList().forEach { runCatching { it.close() } }
         media.close()

@@ -63,5 +63,24 @@ fun selfTest() {
         val report = AirPlayHid.touchReport(listOf(AirPlayContact(0, 32.0, 48.0, true)))
         check(report.size == 12 && report[1] == 1.toByte())
     }
+    test("wired IPC is distinct from the Bluetooth pipe") {
+        val bytes = ByteArrayOutputStream()
+        val pipe = PipeDuplex(Wire(ByteArrayInputStream(byteArrayOf()), bytes), "usb_send")
+        pipe.send(byteArrayOf(0x55, 0x66))
+        val message = Wire(ByteArrayInputStream(bytes.toByteArray()), ByteArrayOutputStream()).receive()!!
+        check(message.text("event") == "usb_send")
+        check((message["data"] as ByteArray).contentEquals(byteArrayOf(0x55, 0x66)))
+        pipe.close()
+    }
+    test("wired CarPlay request carries USB IPv6, not Wi-Fi credentials") {
+        val endpoint = com.shilapi.xcertplay.transport.Iap2WiredCarPlayEndpoint(
+            listOf("fe80::1234"), 7000, "public-pairing-key", "950.7.1", "02:00:00:00:00:01")
+        val frame = com.shilapi.xcertplay.transport.Iap2WiredControlClient.carPlayStartSession(endpoint)
+        check(frame.messageId == 0x4301)
+        val values = com.shilapi.xcertplay.iap2.body.Iap2BodyReader.of(frame).list()
+        check(values.any { it.id == 0 } && values.none { it.id == 1 })
+        val addresses = Iap2ParameterList.parse(values.single { it.id == 0 }.payload).asList()
+        check(addresses.single().payload.contentEquals("fe80::1234\u0000".toByteArray()))
+    }
     println("$count core checks passed; no physical CarPlay session was exercised")
 }

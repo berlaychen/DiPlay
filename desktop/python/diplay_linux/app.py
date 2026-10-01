@@ -19,8 +19,16 @@ def doctor(config):
               'gstreamer': {x: decoder_available(x) for x in ['gtksink', 'appsrc', 'appsink', 'h264parse',
                   'vah264dec', 'vaapih264dec', 'v4l2h264dec', 'v4l2slh264dec', 'avdec_h264',
                   'rtpjitterbuffer', 'rtpL16depay', 'rtpmp4gdepay', 'avdec_aac', 'rtpopusdepay', 'opusenc']},
+              'transport': config.transport,
               'note': 'Factory presence is not proof of hardware decoding or a working iPhone connection.'}
-    if shutil.which('iw'):
+    if config.transport == 'wired':
+        from ctypes.util import find_library
+        from .usb import phones, ncm_interfaces
+        report['usb'] = {'libimobiledevice': bool(find_library('imobiledevice-1.0')),
+                         'idevice_id': bool(shutil.which('idevice_id')),
+                         'phones': [{'ncm': ncm_interfaces(phone)} for phone in phones()],
+                         'note': 'Read-only; no configuration change or trust dialog'}
+    if config.transport == 'wireless' and shutil.which('iw'):
         result = subprocess.run(['iw', 'list'], capture_output=True, text=True, timeout=5)
         report['wifi_ap_reported'] = '* AP' in result.stdout
     print(json.dumps(report, indent=2))
@@ -41,12 +49,13 @@ class Application:
         self.config, self.args = config, args
         self.loop = GLib.MainLoop()
         self.queue = EventQueue()
-        self.core = self.radio = self.frontend = self.web = None
+        self.core = self.radio = self.usb = self.frontend = self.web = None
+        self.generation = 0
         self.media = None
         self.exit_code = 0
         self.stopping = False
         self.connected_once = False
-        self.stats = {'events': 0, 'errors': 0, 'mode': config.mode, 'demo': args.demo}
+        self.stats = {'events': 0, 'errors': 0, 'mode': config.mode, 'demo': args.demo, 'transport': config.transport}
         config.prepare_private_state()
         self.drain_source = GLib.timeout_add(5, self.drain)
         if config.mode == 'web':
@@ -62,16 +71,34 @@ class Application:
             self.core = Demo(config, self.emit)
             self.core.start()
         else:
-            from .radio import Radio
-            from .core import Core
-            net = config.network_settings()
-            self.radio = Radio(net, self.emit, self.control)
-            settings = config.core_settings(self.radio.bt_mac)
-            self.core = Core(settings, self.emit)
+            self.start_connection()
         if args.duration:
             GLib.timeout_add(int(args.duration * 1000), self.stop)
         for signum in (signal.SIGTERM, signal.SIGINT):
             GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signum, self.stop)
+
+    def start_connection(self):
+        """Frontend and phone transport are independent choices, sharing one protocol core."""
+        self.generation += 1
+        generation = self.generation
+        emit = lambda event: self.emit(dict(event, _generation=generation))
+        control = lambda command: self.control(command) if generation == self.generation else None
+        if self.config.transport == 'wired':
+            from .wired import WiredTransport
+            self.usb = WiredTransport(self.config.usb_settings(), emit, control)
+            self.usb.prepare()
+        else:
+            from .radio import Radio
+            from .core import Core
+            net = self.config.network_settings()
+            self.radio = Radio(net, emit, control)
+            self.core = Core(self.config.core_settings(self.radio.bt_mac), emit)
+
+    def usb_prepared(self, facts):
+        from .core import Core
+        generation = self.generation
+        settings = self.config.core_settings(facts['device_mac'], wired=facts)
+        self.core = Core(settings, lambda event: self.emit(dict(event, _generation=generation)))
 
     def emit(self, event):
         try:
@@ -88,11 +115,24 @@ class Application:
             self.core.send(value)
 
     def reconnect(self):
+        if self.stopping:
+            return False
         if self.args.demo:
             self.core.send(dict(op='keyframe'))
-        elif self.radio and self.core:
-            self.core.send(dict(op='disconnect'))
-            self.radio.reconnect()
+        else:
+            # Invalidate old queued callbacks before terminating transports/JVM. The GUI
+            # and browser stay alive, while no stale USB EOF can kill the new session.
+            self.generation += 1
+            for obj in (self.radio, self.usb, self.core):
+                if obj:
+                    obj.close()
+            self.radio = self.usb = self.core = None
+            self.media.reset_session()
+            try:
+                self.start_connection()
+            except Exception as error:
+                self.emit(dict(event='error', component='connection', message=str(error)))
+                self.emit(dict(event='status', state='reconnect_required'))
         return False
 
     def web_microphone(self, key, data):
@@ -118,10 +158,21 @@ class Application:
         for event in events:
             if self.stopping:
                 break
+            event = dict(event)
+            if event.pop('_generation', self.generation) != self.generation:
+                continue
             self.stats['events'] += 1
             kind = event.get('event')
             try:
-                if kind == 'ready' and self.radio:
+                if kind == 'usb_prepared' and self.usb:
+                    self.usb_prepared(event['facts'])
+                elif kind == 'ready' and self.usb:
+                    self.usb.start()
+                elif kind == 'usb_send' and self.usb:
+                    self.usb.write(event['data'])
+                elif kind == 'usb_release' and self.usb:
+                    self.usb.close()
+                elif kind == 'ready' and self.radio:
                     self.radio.start(event)
                 elif kind == 'bt_send' and self.radio:
                     self.radio.write(event['data'])
@@ -134,6 +185,8 @@ class Application:
                         self.stats['errors'] += 1
                         logging.error('%s: %s', event.get('component', kind), event.get('message', ''))
                     elif kind in ('status', 'decoder', 'diagnostic'):
+                        if kind == 'status':
+                            event.setdefault('transport', self.config.transport)
                         logging.info('%s', json.dumps(event, ensure_ascii=False))
                     if kind == 'status' and event.get('state') == 'connected':
                         self.connected_once = True
@@ -158,7 +211,7 @@ class Application:
 
     def close(self):
         self.stopping = True
-        for obj in (self.radio, self.core, self.media, self.web):
+        for obj in (self.radio, self.usb, self.core, self.media, self.web):
             if obj:
                 try:
                     obj.close()
@@ -183,9 +236,10 @@ class Application:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='DiPlay Linux wireless receiver preview')
+    parser = argparse.ArgumentParser(description='DiPlay Linux wired/wireless receiver preview')
     parser.add_argument('--config', type=Path)
     parser.add_argument('--mode', choices=['native', 'web'], default='native')
+    parser.add_argument('--transport', choices=['wired', 'wireless'], help='Override connection.transport')
     parser.add_argument('--demo', action='store_true', help='Synthetic test pattern, no phone/authentication')
     parser.add_argument('--doctor', action='store_true')
     parser.add_argument('--duration', type=float, default=0, help='Stop after N seconds (smoke testing)')
@@ -193,12 +247,14 @@ def main():
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     config = Config.read(args.config, args.mode) if args.config else Config({}, args.mode)
+    if args.transport:
+        config.document['connection']['transport'] = args.transport
     if args.doctor:
         doctor(config); return 0
     if args.duration < 0 or args.duration > 86400:
         parser.error('duration must be in 0..86400 seconds')
     if not args.demo and not args.config:
-        parser.error('Live mode needs an explicit --config with AP, phone and authentication settings')
+        parser.error('Live mode needs --config with authentication and wired USB or wireless AP settings')
     application = None
     try:
         application = Application.__new__(Application)

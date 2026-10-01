@@ -319,6 +319,22 @@ class Media:
             self.web_send(dict(event='audio_start', id=key, rate=48000, channels=2, role=state[2]))
         self.resync()
 
+    def reset_session(self):
+        for key in list(self.audio):
+            self._audio_stop(key)
+        for key in list(self.mics):
+            self._mic_stop(key)
+        self.sps_pps = b''
+        self.video_info = None
+        self.wait_key = True
+        self.origin = None
+        self.video_frames_rendered = 0
+        if self.video:
+            self.video.set_state(Gst.State.READY)
+            self.start_native()
+        if self.web_send:
+            self.web_send(dict(event='video_stop'))
+
     def close(self):
         self.closed = True
         if self.video:

@@ -32,7 +32,8 @@ class Wire(input: InputStream, output: OutputStream) {
 }
 
 /** RFCOMM is owned by BlueZ/Python. The JVM sees exactly the upstream byte-stream seam. */
-class PipeDuplex(private val wire: Wire) : BlockingDuplexByteStream {
+class PipeDuplex(private val wire: Wire, private val outputEvent: String = "bt_send") : BlockingDuplexByteStream {
+    init { require(outputEvent == "bt_send" || outputEvent == "usb_send") }
     private val chunks = ArrayBlockingQueue<ByteArray>(64)
     private val closed = AtomicBoolean(false)
     private var pending = ByteArray(0)
@@ -44,7 +45,7 @@ class PipeDuplex(private val wire: Wire) : BlockingDuplexByteStream {
     }
     override fun send(data: ByteArray) {
         if (closed.get()) throw EOFException("RFCOMM closed")
-        wire.send(mapOf("event" to "bt_send", "data" to data))
+        wire.send(mapOf("event" to outputEvent, "data" to data))
     }
     @Synchronized override fun recv(maxBytes: Int, timeoutMillis: Long): ByteArray? {
         require(maxBytes > 0 && timeoutMillis >= 0)

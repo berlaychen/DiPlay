@@ -22,6 +22,9 @@ class Config:
     def __post_init__(self):
         if self.mode not in ('native', 'web'):
             raise ValueError('mode must be native or web')
+        connection = self.document.setdefault('connection', {})
+        if connection.setdefault('transport', 'wireless') not in ('wired', 'wireless'):
+            raise ValueError('connection.transport must be wired or wireless')
         video = self.document.setdefault('video', {})
         for key, default, low, high in (('width', 960, 320, 1920), ('height', 540, 240, 1200)):
             value = video.setdefault(key, default)
@@ -83,8 +86,49 @@ class Config:
             bind += '%' + iface
         return dict(net, address=bind, channel=channel)
 
-    def core_settings(self, bt_mac):
-        net = self.network_settings()
+    @property
+    def transport(self):
+        return self.document['connection']['transport']
+
+    def usb_settings(self):
+        from .usb import serial_key
+        values = dict(self.document.get('usb', {}))
+        for field in ('configure', 'bring_up'):
+            if type(values.setdefault(field, False)) is not bool:
+                raise ValueError(f'usb.{field} must be boolean')
+        if type(values.setdefault('timeout', 30)) is not int or not 1 <= values['timeout'] <= 120:
+            raise ValueError('usb.timeout must be in 1..120 seconds')
+        if values.get('udid'):
+            serial_key(values['udid'])
+        if values.get('interface') and not IFACE.fullmatch(values['interface']):
+            raise ValueError('Invalid usb.interface')
+        return values
+
+    def core_settings(self, bt_mac, wired=None):
+        if self.transport == 'wired':
+            if not wired:
+                raise ValueError('Wired mode needs discovered USB/NCM endpoint facts')
+            from .usb import serial_key
+            serial_key(wired['udid'])
+            iface = wired['interface']
+            if not IFACE.fullmatch(iface):
+                raise ValueError('Invalid USB NCM interface')
+            bind = wired['address']
+            ip = ipaddress.ip_address(bind.split('%')[0])
+            if not isinstance(ip, ipaddress.IPv6Address) or not ip.is_link_local:
+                raise ValueError('Wired mode requires an IPv6 link-local NCM endpoint')
+            if bind.split('%')[-1] != iface or '%' not in bind:
+                raise ValueError('NCM address scope does not match the selected interface')
+            number = wired['interface_number']
+            if type(number) is not int or not 0 <= number <= 255:
+                raise ValueError('Invalid NCM control-interface number')
+            net = dict(address=bind, airplay_port=self.document.get('usb', {}).get('airplay_port', 7000))
+        else:
+            if wired is not None:
+                raise ValueError('Wireless mode cannot use wired endpoint facts')
+            net = self.network_settings()
+        if not MAC.fullmatch(bt_mac):
+            raise ValueError('Receiver MAC is invalid')
         auth = self.document.get('auth', {})
         mode = auth.get('mode', 'local')
         if mode == 'local':
@@ -113,14 +157,19 @@ class Config:
                 raise ValueError('Remote token must be in an owner-only file')
             token = path.read_text().strip()
         video = self.document['video']
-        return dict(state_dir=str(self.state_dir), width=video['width'], height=video['height'],
+        result = dict(transport=self.transport, state_dir=str(self.state_dir), width=video['width'], height=video['height'],
                     fps=video['fps'], bt_mac=bt_mac, address=net['address'],
                     name=self.document.get('name', 'DiPlay Linux'),
                     width_mm=video.get('width_mm', 200), height_mm=video.get('height_mm', 113),
                     airplay_port=net.get('airplay_port', 7000),
                     microphone=self.document['audio']['microphone'],
                     auth_mode=mode, auth_dir=str(directory), auth_url=auth.get('url', ''),
-                    auth_token=token, ssid=net['ssid'], password=net['password'], channel=net['channel'])
+                    auth_token=token)
+        if self.transport == 'wired':
+            result['usb_interface_number'] = wired['interface_number']
+        else:
+            result.update(ssid=net['ssid'], password=net['password'], channel=net['channel'])
+        return result
 
 
 def interface_address(interface):

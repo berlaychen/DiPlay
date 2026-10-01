@@ -24,3 +24,6 @@ directory = "~/.config/diplay/identity"
 [web]
 host = "127.0.0.1"
 port = 8765
+
+[connection]
+transport="wireless"

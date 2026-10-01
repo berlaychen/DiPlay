@@ -9,13 +9,27 @@ Two Linux entry points share the existing DiPlay/xcertplay Kotlin protocol core:
 
 Targets: **x86_64** (ASUS T100's 64-bit CPU) and **aarch64** (64-bit Raspberry Pi OS on Pi 4/5). Native T100 starts at 960x540 / H.264 / 30 fps. This is not a browser-only CarPlay implementation.
 
-## Status: wireless-first engineering preview
+## Status: wired + wireless engineering preview
 
 The port uses actual upstream iAP2 authentication/control, AirPlay negotiation, encrypted streams, HID and microphone packetization, not a replacement mock protocol. A separate demo exercises synthetic video/audio.
 
 **There has been no physical T100, Raspberry Pi, iPhone or automotive test during this port.** Compilation and test-pattern playback do not prove iPhone interoperability, wireless handover, hardware acceleration, Siri, echo cancellation, reconnect reliability or vehicle safety. Check the actual workflow and `VALIDATION.md` rather than assuming tests passed.
 
-Not implemented in this preview: **Linux wired-USB CarPlay**, Windows, BYD HUD/vehicle APIs, automatic AP/pairing or a native settings editor. Shared wired-protocol types are retained only where the wireless core references them.
+Both frontends select the same two transport implementations:
+
+| Frontend | Wired USB | Wireless Bluetooth + AP |
+| --- | --- | --- |
+| Native GTK/GStreamer | Implemented; physical validation pending | Implemented; physical validation pending |
+| Separate Web frontend | Implemented; physical validation pending | Implemented; physical validation pending |
+
+Use `--transport wired|wireless` or `[connection] transport="..."`. Wired mode uses
+an isolated libimobiledevice Carkit helper and the selected iPhone's kernel CDC-NCM
+interface. It does **not** require Bluetooth, AP credentials, Wi-Fi or a remote
+server when local authentication is selected. See [USB.md](USB.md) for explicit
+USB preparation, cable/host-port requirements and complete commands.
+
+Not implemented: Windows, BYD HUD/vehicle APIs, automatic AP/pairing or a native
+settings editor. The backend/Web split is real, not a browser-only USB receiver.
 
 ## Install dependencies and test the display
 
@@ -78,7 +92,7 @@ python3 desktop/package.py /tmp/diplay-private.tar.gz \
 
 Do not publish this archive. On the target, set `[auth].directory` to the absolute path of `desktop/runtime-identity` in the extracted bundle. The app never silently selects a bundled identity instead of the configured one.
 
-## Configure actual wireless CarPlay
+## Configure wireless CarPlay (both frontends)
 
 ```sh
 mkdir -p ~/.config/diplay
@@ -108,7 +122,32 @@ Use an isolated AP, not a public LAN: upstream media listeners allocate addition
 ./desktop/diplay --mode web --config ~/.config/diplay/config.toml
 ```
 
-The application starts waiting, not connected. Bluetooth carries iAP2 bootstrap, the iPhone joins the advertised AP, and the protocol transitions to Wi-Fi. Use Reconnect after restoring connectivity. Unattended reconnection is an on-device validation item.
+The application starts waiting, not connected. In wireless mode Bluetooth carries
+iAP2 bootstrap, the iPhone joins the advertised AP, and the protocol transitions to
+Wi-Fi. Use Reconnect after restoring connectivity. Unattended reconnection is an
+on-device validation item.
+
+5 GHz is preferred, **not a code-level requirement**: a configured 2.4 GHz AP can
+also be advertised (for example channel 6), but iPhone/driver/interference
+compatibility is unverified. Joining 5 GHz Wi-Fi is not proof of 5 GHz AP support.
+Wired mode does not use either Wi-Fi frequency band.
+
+## Configure wired CarPlay (both frontends)
+
+After authentication provisioning and USB preparation from [USB.md](USB.md):
+
+```sh
+cp desktop/profiles/t100-wired.toml ~/.config/diplay/config.toml
+# Or rpi4-wired.toml / rpi5-wired.toml.
+chmod 600 ~/.config/diplay/config.toml
+./desktop/diplay --doctor --transport wired --config ~/.config/diplay/config.toml
+./desktop/diplay --mode native --transport wired --config ~/.config/diplay/config.toml
+# Or:
+./desktop/diplay --mode web --transport wired --config ~/.config/diplay/config.toml
+```
+
+Do not run the two receivers simultaneously on one iPhone. Transport selection
+changes the backend, not the rendering or authentication implementation.
 
 ## Hardware and performance
 

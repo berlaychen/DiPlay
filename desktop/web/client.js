@@ -85,7 +85,7 @@ async function configure(m,recovery=false){
 }
 function receive(m,data){
   if(m.event==='authorized'){$('login').hidden=true;return;}
-  if(m.event==='status'){$('state').textContent=m.state;return;}
+  if(m.event==='status'){$('state').textContent=(m.transport?m.transport.toUpperCase()+' | ':'')+m.state;return;}
   if(m.event==='video_config'){configure(m).catch(e=>diagnostic(e.message));return;}
   if(m.event==='video'&&data&&decoder?.state==='configured'){
     try{

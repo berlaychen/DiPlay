@@ -1,0 +1,31 @@
+name="DiPlay rpi4 USB"
+
+[connection]
+transport="wired"
+
+[video]
+width=1280
+height=720
+fps=30
+decoder="auto"
+
+[audio]
+microphone=false
+
+[auth]
+mode="local"
+directory="~/.config/diplay/identity"
+
+[usb]
+# Empty selects the only attached iPhone; set this when several are connected.
+udid=""
+# Empty discovers the selected phone's cdc_ncm interface, never ipheth/USB tethering.
+interface=""
+timeout=30
+# Runtime is read-only by default. Use diplay-usb prepare explicitly for setup.
+configure=false
+bring_up=false
+
+[web]
+host="127.0.0.1"
+port=8765

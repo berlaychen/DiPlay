@@ -119,7 +119,7 @@ class NativeFrontend:
     def status(self, event):
         kind = event.get('event')
         if kind == 'status':
-            self.label.set_text(event.get('state', ''))
+            self.label.set_text(event.get('transport', '').upper() + ' | ' + event.get('state', ''))
         elif kind in ('error', 'fatal'):
             self.label.set_text(event.get('component', kind) + ': ' + event.get('message', '')[:220])
         elif kind == 'decoder':
