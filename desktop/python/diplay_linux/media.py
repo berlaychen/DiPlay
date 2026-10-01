@@ -1,11 +1,7 @@
-"""GStreamer output adapters. Encoded H.264 stays encoded until the selected renderer.
+"""GStreamer adapters; native GTK has no browser and Web forwards compressed AVC.
 
-GTK native mode does not run Chromium. Web mode forwards compressed H.264 and
-uses GStreamer only for audio, avoiding a host video decode/encode round trip.
+Pipelines are bounded and report failures. This preview is not zero-copy.
 """
-import logging
-import struct
-import threading
 import time
 import gi
 
@@ -41,9 +37,7 @@ class Media:
         self.config, self.command, self.notify = config, command, notify
         self.web_send = web_send
         self.mode = config.mode
-        self.video = None
-        self.video_src = None
-        self.video_widget = None
+        self.video = self.video_src = self.video_widget = None
         self.sps_pps = b''
         self.video_info = None
         self.wait_key = True
@@ -52,11 +46,8 @@ class Media:
         self.audio = {}
         self.mics = {}
         self.closed = False
-        self.frames = 0
-        self.video_frames_rendered = 0
-        self.audio_packets = 0
+        self.frames = self.video_frames_rendered = self.audio_packets = 0
         self.selected_decoder = ''
-        self.lock = threading.Lock()
         self.buses = {}
         self.audio_test = config.document.get('test_audio_sink', False)
         if self.mode == 'native':
@@ -81,14 +72,12 @@ class Media:
             self.notify(dict(event='error', component=component, message=error.message[:400]))
             if component == 'video':
                 self.wait_key = True
-                # Explicit fallback only in auto mode. Report it, never label software as hardware.
                 if self.config.document['video']['decoder'] == 'auto' and self.selected_decoder != 'avdec_h264':
                     GLib.idle_add(self._fallback_video)
 
     def _fallback_video(self):
         if self.closed or self.selected_decoder == 'avdec_h264':
             return False
-        # gtksink owns a widget. Reuse it across decoder changes to preserve GTK parenting.
         sink = self.video.get_by_name('display')
         self._dispose(self.video)
         self.video.remove(sink)
@@ -115,8 +104,17 @@ class Media:
         self.video_widget = pipeline.get_by_name('display').get_property('widget')
         pipeline.get_by_name('rendered').connect('handoff', self._rendered)
         self._watch(pipeline, 'video')
-        pipeline.set_state(Gst.State.PLAYING)
+        # First startup waits for NativeFrontend to parent the widget. Otherwise
+        # gtksink creates a separate window and touch no longer overlays the video.
+        if existing_sink is not None:
+            self.start_native()
         self.notify(dict(event='decoder', name=name, hardware=name != 'avdec_h264'))
+
+    def start_native(self):
+        if self.mode != 'native' or self.video_widget.get_parent() is None:
+            raise RuntimeError('Parent the native video widget before starting playback')
+        if self.video.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
+            raise RuntimeError('Cannot start native video pipeline')
 
     def _rendered(self, identity, buffer):
         self.video_frames_rendered += 1
@@ -141,7 +139,9 @@ class Media:
             self.video_info = dict(event='video_config', codec='avc1.' + codec,
                                    width=self.config.document['video']['width'],
                                    height=self.config.document['video']['height'])
-            self.wait_key = True; self.origin = None; self.video_frames_rendered = 0
+            self.wait_key = True
+            self.origin = None
+            self.video_frames_rendered = 0
             if self.web_send:
                 self.web_send(self.video_info)
         elif kind == 'video':
@@ -151,27 +151,29 @@ class Media:
                 self.wait_key = False
                 data = self.sps_pps + event['data']
             elif self.wait_key:
-                self._request_key(); return
+                self._request_key()
+                return
             else:
                 data = event['data']
             self.frames += 1
             if self.mode == 'web':
-                self.web_send(dict(event='video', data=data, key=bool(event.get('key')),
-                                   time_us=event['time_us']))
+                self.web_send(dict(event='video', data=data, key=bool(event.get('key')), time_us=event['time_us']))
             else:
                 buffer = make_buffer(data)
                 if self.origin is None:
                     self.origin = event['time_us']
                 buffer.pts = max(0, event['time_us'] - self.origin) * 1000
                 buffer.dts = Gst.CLOCK_TIME_NONE
-                # appsrc already queued data must stay bounded; drop at an IDR boundary.
                 if self.video_src.get_property('current-level-bytes') > 2 * 1024 * 1024:
-                    self.resync(); return
+                    self.resync()
+                    return
                 result = self.video_src.emit('push-buffer', buffer)
                 if result not in (Gst.FlowReturn.OK, Gst.FlowReturn.FLUSHING):
                     self.notify(dict(event='error', component='video', message='Video pipeline rejected a buffer'))
         elif kind == 'video_stop':
-            self.wait_key = True; self.sps_pps = b''
+            self.wait_key = True
+            self.sps_pps = b''
+            self.video_info = None
             if self.web_send:
                 self.web_send(event)
         elif kind == 'audio_start':
@@ -200,7 +202,8 @@ class Media:
         codec = event['codec']
         caps = f'application/x-rtp,media=audio,clock-rate={rate},channels={channels}'
         if codec == 'LPCM':
-            caps += ',encoding-name=L16'; decode = 'rtpL16depay'
+            caps += ',encoding-name=L16'
+            decode = 'rtpL16depay'
         elif codec == 'AAC_LC':
             if rate not in RATES:
                 raise ValueError('Unsupported AAC sample rate')
@@ -239,7 +242,6 @@ class Media:
     def _duck(self):
         priority = any(s[2] in ('telephony', 'speechrecognition', 'alert', 'guidance') for s in self.audio.values())
         for pipeline, source, role, volume in self.audio.values():
-            # A conservative fallback, not a claim of OEM audio policy equivalence.
             volume.set_property('volume', 0.3 if priority and role in ('default', 'media') else 1.0)
 
     def _audio_stop(self, key):
@@ -288,9 +290,11 @@ class Media:
         if state['codec'] == 'OPUS':
             self.command(dict(op='mic_packet', id=state['key'], data=data))
         else:
-            pending = state['pending']; pending.extend(data)
+            pending = state['pending']
+            pending.extend(data)
             while len(pending) >= state['size']:
-                chunk = bytes(pending[:state['size']]); del pending[:state['size']]
+                chunk = bytes(pending[:state['size']])
+                del pending[:state['size']]
                 self.command(dict(op='mic_packet', id=state['key'], data=chunk))
         return Gst.FlowReturn.OK
 
