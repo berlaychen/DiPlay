@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export PYTHONPATH="$HERE/python${PYTHONPATH:+:$PYTHONPATH}"
+exec "${DIPLAY_PYTHON:-/usr/bin/python3}" -m diplay_linux.app "$@"

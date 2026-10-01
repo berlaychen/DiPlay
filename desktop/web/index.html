@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DiPlay Linux</title><link rel="stylesheet" href="/style.css"></head>
+<body><header><strong>DiPlay <small>Linux preview</small></strong><span id="state" role="status">Disconnected</span><button id="fullscreen">Fullscreen</button></header>
+<main><canvas id="screen" width="960" height="540" aria-label="CarPlay display"></canvas><div id="placeholder">Connect an iPhone to the Linux receiver.<br><small>Demo streams are explicitly labeled; a working browser is not a CarPlay handshake test.</small></div></main>
+<nav><button data-key="home">Home</button><button data-key="back">Back</button><button data-key="siri">Siri</button><button id="audio">Enable sound</button><label><input id="mic" type="checkbox"> Allow microphone</label><button id="reconnect">Reconnect phone</button></nav>
+<section id="login"><form><h1>Connect to your receiver</h1><p>Paste the token from <code>~/.local/state/diplay/web-token</code> on the Linux host. The token is kept only in this tab.</p><input id="token" type="password" autocomplete="off" required aria-label="Receiver token"><button>Connect</button><p id="error" role="alert"></p></form></section>
+<footer><span id="diagnostic">H.264 / local WebCodecs</span><span id="counter">0 frames</span></footer><script src="/client.js"></script></body></html>

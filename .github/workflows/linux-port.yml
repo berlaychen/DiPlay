@@ -1,23 +1,96 @@
-name: Linux port
+name: Linux native and Web
 on:
   push:
     branches: [feat/linux-native-web]
   pull_request:
-    paths: ['desktop/**', '.github/workflows/linux-port.yml']
+    paths: ['desktop/**', 'shared/src/main/java/**', '.github/workflows/linux-port.yml']
+  workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: linux-port-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
-  source:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Archive public source for offline development
-        run: git archive HEAD -o /tmp/diplay-source.tar
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends python3-gi python3-dbus python3-aiohttp python3-pytest python3-cryptography python3-venv \
+            gir1.2-gtk-3.0 gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
+            gstreamer1.0-tools gstreamer1.0-gtk3 gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav \
+            ffmpeg xvfb xauth libbcprov-java
+          curl -fLsS https://github.com/JetBrains/kotlin/releases/download/v1.9.24/kotlin-compiler-1.9.24.zip -o /tmp/kotlin.zip
+          unzip -q /tmp/kotlin.zip -d /tmp/kotlin
+          echo /tmp/kotlin/kotlinc/bin >> "$GITHUB_PATH"
+      - name: Compile portable core and run protocol checks
+        run: python3 desktop/build.py test
+      - name: Python, identity import and Web security tests
+        run: PYTHONPATH=desktop/python /usr/bin/python3 -m pytest -q desktop/tests
+      - name: Native synthetic H.264 and PCM smoke
+        run: |
+          mkdir -p desktop/build/smoke
+          printf 'test_audio_sink=true\n[video]\nwidth=640\nheight=360\nfps=30\ndecoder="avdec_h264"\n' > /tmp/native-test.toml
+          xvfb-run -a desktop/diplay --demo --mode native --config /tmp/native-test.toml --duration 10 --stats desktop/build/smoke/native-stats.json 2>&1 | tee desktop/build/smoke/native.log
+          python3 - <<'PY'
+          import json
+          s=json.load(open('desktop/build/smoke/native-stats.json'))
+          assert s['errors']==0, s
+          assert s['video_frames_rendered']>20, s
+          assert s['audio_rtp_packets']>20, s
+          assert not s['physical_session_observed'], s
+          PY
+      - name: Browser WebCodecs smoke
+        if: matrix.arch == 'x86_64'
+        run: |
+          python3 -m venv /tmp/browser-venv
+          /tmp/browser-venv/bin/pip -q install playwright
+          /tmp/browser-venv/bin/python -m playwright install --with-deps chromium
+          /tmp/browser-venv/bin/python desktop/tests/browser_smoke.py
+      - name: Inspect pinned upstream APK identity (not uploaded)
+        if: matrix.arch == 'x86_64'
+        run: |
+          umask 077
+          desktop/diplay-auth fetch-upstream --accept-experimental-identity --destination /tmp/diplay-auth-check > desktop/build/smoke/upstream-identity.json
+          desktop/diplay-auth check --directory /tmp/diplay-auth-check
+          rm -rf /tmp/diplay-auth-check
+      - name: Package preview (source and importer, no private credentials)
+        run: |
+          mkdir -p /tmp/package/DiPlay
+          cp -a desktop shared LICENSE /tmp/package/DiPlay/
+          mkdir -p /tmp/package/DiPlay/docs
+          cp -a docs/licenses docs/THIRD_PARTY_NOTICES.md /tmp/package/DiPlay/docs/
+          rm -rf /tmp/package/DiPlay/desktop/build/generated /tmp/package/DiPlay/desktop/.gradle
+          find /tmp/package -type d -name __pycache__ -prune -exec rm -rf {} +
+          if find /tmp/package -type f \( -name '*.pk8' -o -name '*.p7b' -o -name '*.keystore' -o -name 'web-token' \) | grep .; then exit 1; fi
+          tar -C /tmp/package -czf diplay-linux-${{ matrix.arch }}-preview.tar.gz DiPlay
+          sha256sum diplay-linux-${{ matrix.arch }}-preview.tar.gz > diplay-linux-${{ matrix.arch }}-preview.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-${{ matrix.arch }}-validation
+          path: desktop/build/smoke
       - uses: actions/upload-artifact@v4
         with:
-          name: diplay-port-source
-          path: /tmp/diplay-source.tar
-          retention-days: 1
+          name: diplay-linux-${{ matrix.arch }}-preview
+          path: |
+            diplay-linux-${{ matrix.arch }}-preview.tar.gz
+            diplay-linux-${{ matrix.arch }}-preview.tar.gz.sha256
