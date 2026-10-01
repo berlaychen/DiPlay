@@ -10,7 +10,8 @@ The workflow `Linux native and Web` runs on generic x86_64 and ARM64 Ubuntu host
 - Identity importer tests use generated synthetic identities: matching/signing, wrong key/hash, absent/duplicate/oversized/symlink ZIP entries, path traversal avoidance, permissions, idempotence and no overwrites.
 - JVM integration test provisions a synthetic identity and starts the actual RTSP listener. It verifies a response and clean shutdown; **not iPhone trust**.
 - GTK/GStreamer/Xvfb synthetic H.264/PCM playback, explicit software decoding and silent audio sink. Render counts are decoded-buffer observations, not physical panel latency.
-- x86_64 Chromium test renders frames via WebCodecs, enables AudioContext, sends controls and captures a screenshot. The backend status stays explicitly DEMO.
+- Six Node.js lifecycle regression tests exercise terminal decoder errors, stale callbacks, stopping and bounded recovery. They use fake codecs and do not claim media playback.
+- x86_64 Chromium test renders frames via WebCodecs, enables AudioContext, sends controls, forces a closed-decoder recovery and captures a screenshot. The backend status stays explicitly DEMO.
 - Pinned upstream public APK import checks SHA-256, assets and P-256 key/certificate consistency. Only nonsecret metadata is archived; the private files are deleted. This does not prove iOS accepts the identity.
 - Packaging excludes accessory credentials, Android keystores, browser tokens and caches.
 

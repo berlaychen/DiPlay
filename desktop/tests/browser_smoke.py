@@ -14,6 +14,7 @@ from playwright.sync_api import sync_playwright, expect
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT/'build/smoke'
 OUTPUT.mkdir(parents=True, exist_ok=True)
+subprocess.run(['node', '--test', str(ROOT/'tests/test_web_client.cjs')], check=True)
 with socket.socket() as sock:
     sock.bind(('127.0.0.1',0)); port=sock.getsockname()[1]
 with tempfile.TemporaryDirectory(prefix='diplay-web-smoke-') as temporary:
@@ -62,8 +63,14 @@ with tempfile.TemporaryDirectory(prefix='diplay-web-smoke-') as temporary:
                     assert page.evaluate('() => context.getImageData(0,0,canvas.width,canvas.height).data.some((x,i)=>i%4!==3&&x>30)')
                     audio_peak=page.evaluate('() => {const s=new Float32Array(testAnalyser.fftSize);testAnalyser.getFloatTimeDomainData(s);return Math.max(...s.map(Math.abs));}')
                     assert audio_peak>0.001, 'AudioWorklet did not produce the synthetic tone'
+                    # WebCodecs closes a decoder on terminal errors. Simulate that lifecycle,
+                    # then require the real client to recreate it and render more actual AVC.
+                    page.evaluate('() => { decoder.close(); recoverVideo(new Error("test: closed decoder")); }')
+                    page.wait_for_function('decoder?.state === "configured" && videoCount >= 15', timeout=15000)
+                    assert page.evaluate('decoderRecoveries') == 1
                     assert not errors,errors
                     metrics=page.evaluate('() => ({frames:videoCount,audio:audioContext.state,codec:configuration.codec,decoderPreference:decoderOptions.hardwareAcceleration})')
+                    metrics['decoder_recovery_verified']=True
                     metrics['audio_peak']=audio_peak
                     metrics['browser']=browser.version
                     (OUTPUT/'browser.json').write_text(json.dumps(metrics,indent=2))

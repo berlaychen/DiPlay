@@ -1,7 +1,7 @@
 'use strict';
 const $=id=>document.getElementById(id),canvas=$('screen'),context=canvas.getContext('2d',{alpha:false});
 let ws,decoder,decoderOptions,configuration,waitingKey=true,videoCount=0,audioContext,playback,micStream,micNode,micSource,micMute,micId=null;
-let codecEpoch=0;
+let codecEpoch=0,decoderRecoveries=0,recoveryTimer=null;
 function diagnostic(text){$('diagnostic').textContent=text;}
 function send(value){if(ws?.readyState===WebSocket.OPEN)ws.send(JSON.stringify(value));}
 function stopMicrophone(){micSource?.disconnect();micNode?.disconnect();micMute?.disconnect();micStream?.getTracks().forEach(t=>t.stop());micStream=micSource=micNode=micMute=null;micId=null;}
@@ -30,14 +30,37 @@ async function startMicrophone(id){
     micSource.connect(micNode);micMute=audioContext.createGain();micMute.gain.value=0;micNode.connect(micMute).connect(audioContext.destination);
   }catch(e){stopMicrophone();diagnostic('Microphone: '+e.message);}
 }
-async function configure(m){
+// close() is terminal in WebCodecs, including errors reported by the codec.
+// Never reuse a failed decoder or allow an old async callback to repaint a new session.
+function stopVideo(){
+  codecEpoch++;clearTimeout(recoveryTimer);recoveryTimer=null;
+  if(decoder&&decoder.state!=='closed')decoder.close();
+  decoder=null;decoderOptions=null;configuration=null;waitingKey=true;decoderRecoveries=0;
+  context.clearRect(0,0,canvas.width,canvas.height);$('placeholder').hidden=false;
+}
+function recoverVideo(error,epoch=codecEpoch){
+  if(epoch!==codecEpoch||!configuration)return;
+  const ticket=++codecEpoch,settings=configuration;
+  clearTimeout(recoveryTimer);recoveryTimer=null;waitingKey=true;
+  if(decoder&&decoder.state!=='closed')decoder.close();decoder=null;
+  if(++decoderRecoveries>3){diagnostic('Video decoder failed repeatedly; reconnect or use the native frontend');return;}
+  diagnostic('Recovering video decoder: '+error.message);
+  recoveryTimer=setTimeout(()=>{
+    if(ticket!==codecEpoch||configuration!==settings)return;
+    recoveryTimer=null;configure(settings,true).catch(e=>recoverVideo(e));
+  },200*decoderRecoveries);
+}
+async function configure(m,recovery=false){
   const epoch=++codecEpoch;
+  clearTimeout(recoveryTimer);recoveryTimer=null;
+  if(!recovery)decoderRecoveries=0;
   configuration=m;waitingKey=true;videoCount=0;
   if(decoder&&decoder.state!=='closed')decoder.close();decoder=null;decoderOptions=null;
   if(!isSecureContext||!('VideoDecoder'in window)){diagnostic('WebCodecs requires a supported browser on localhost or HTTPS');return;}
-  // A preferred hardware decoder may be unavailable on old GPUs or headless CI.
-  // Do not reject a working software H.264 decoder merely because HW is absent.
-  for(const acceleration of ['prefer-hardware','no-preference','prefer-software']){
+  // A preferred HW decoder can be present but fail at runtime. Recovery probes
+  // a software preference first instead of repeatedly reopening the failed HW path.
+  const choices=recovery?['prefer-software','no-preference']:['prefer-hardware','no-preference','prefer-software'];
+  for(const acceleration of choices){
     const candidate={codec:m.codec,optimizeForLatency:true,hardwareAcceleration:acceleration};
     try{
       const support=await VideoDecoder.isConfigSupported(candidate);
@@ -46,13 +69,18 @@ async function configure(m){
     }catch(e){if(epoch!==codecEpoch)return;}
   }
   if(!decoderOptions){diagnostic('No H.264 WebCodecs decoder: use a codec-enabled browser or the native frontend');return;}
-  decoder=new VideoDecoder({output:frame=>{
-    if(canvas.width!==frame.displayWidth)canvas.width=frame.displayWidth;
-    if(canvas.height!==frame.displayHeight)canvas.height=frame.displayHeight;
-    context.drawImage(frame,0,0);frame.close();$('placeholder').hidden=true;$('counter').textContent=(++videoCount)+' frames';
-    if(videoCount===1)send({op:'rendered'});
-  },error:error=>{diagnostic('Decoder: '+error.message);waitingKey=true;send({op:'keyframe'});}});
-  decoder.configure(decoderOptions);send({op:'keyframe'});
+  const instance=new VideoDecoder({output:frame=>{
+    try{
+      if(epoch!==codecEpoch||decoder!==instance)return;
+      if(canvas.width!==frame.displayWidth)canvas.width=frame.displayWidth;
+      if(canvas.height!==frame.displayHeight)canvas.height=frame.displayHeight;
+      context.drawImage(frame,0,0);$('placeholder').hidden=true;$('counter').textContent=(++videoCount)+' frames';
+      if(videoCount===1)send({op:'rendered'});
+    }finally{frame.close();}
+  },error:error=>{if(decoder===instance)recoverVideo(error,epoch);}});
+  decoder=instance;
+  try{decoder.configure(decoderOptions);}catch(e){recoverVideo(e,epoch);return;}
+  send({op:'keyframe'});
   diagnostic(m.codec+' / WebCodecs '+decoderOptions.hardwareAcceleration+' (preference, not proof of hardware use)');
 }
 function receive(m,data){
@@ -60,21 +88,23 @@ function receive(m,data){
   if(m.event==='status'){$('state').textContent=m.state;return;}
   if(m.event==='video_config'){configure(m).catch(e=>diagnostic(e.message));return;}
   if(m.event==='video'&&data&&decoder?.state==='configured'){
-    if(decoder.decodeQueueSize>4){waitingKey=true;decoder.reset();decoder.configure(decoderOptions);send({op:'keyframe'});}
-    if(waitingKey&&!m.key)return;
-    if(m.key)waitingKey=false;
-    try{decoder.decode(new EncodedVideoChunk({type:m.key?'key':'delta',timestamp:m.time_us,data}));}catch(e){waitingKey=true;send({op:'keyframe'});diagnostic(e.message);}
+    try{
+      if(decoder.decodeQueueSize>4){waitingKey=true;decoder.reset();decoder.configure(decoderOptions);send({op:'keyframe'});}
+      if(waitingKey&&!m.key)return;
+      if(m.key)waitingKey=false;
+      decoder.decode(new EncodedVideoChunk({type:m.key?'key':'delta',timestamp:m.time_us,data}));
+    }catch(e){recoverVideo(e);}
   }else if(m.event==='pcm'&&data&&playback){
     const copy=data.slice().buffer;playback.port.postMessage({op:'pcm',id:m.id,data:copy},[copy]);
   }else if(m.event==='audio_stop'){playback?.port.postMessage({op:'stop',id:m.id});
   }else if(m.event==='mic_start'){startMicrophone(m.id);
   }else if(m.event==='mic_stop'){if(m.id===micId)stopMicrophone();
   }else if(m.event==='resync'){waitingKey=true;send({op:'keyframe'});
-  }else if(m.event==='video_stop'){context.clearRect(0,0,canvas.width,canvas.height);$('placeholder').hidden=false;
+  }else if(m.event==='video_stop'){stopVideo();
   }else if(m.event==='error'||m.event==='fatal'||m.event==='diagnostic'){diagnostic((m.component||m.event)+': '+m.message);}
 }
 $('login').querySelector('form').onsubmit=event=>{
-  event.preventDefault();$('error').textContent='';ws?.close();
+  event.preventDefault();$('error').textContent='';ws?.close();stopVideo();
   ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');ws.binaryType='arraybuffer';
   const socket=ws;
   ws.onopen=()=>socket.send(JSON.stringify({op:'auth',token:$('token').value.trim()}));
@@ -86,7 +116,7 @@ $('login').querySelector('form').onsubmit=event=>{
       receive(JSON.parse(new TextDecoder().decode(bytes.subarray(4,4+size))),bytes.subarray(4+size));
     }catch(e){diagnostic('Stream: '+e.message);}
   };
-  ws.onclose=event=>{if(socket!==ws)return;$('state').textContent='Disconnected';$('login').hidden=false;$('error').textContent=event.reason||'Receiver disconnected';stopMicrophone();playback?.port.postMessage({op:'reset'});if(decoder&&decoder.state!=='closed')decoder.close();decoder=null;codecEpoch++;};
+  ws.onclose=event=>{if(socket!==ws)return;$('state').textContent='Disconnected';$('login').hidden=false;$('error').textContent=event.reason||'Receiver disconnected';stopMicrophone();playback?.port.postMessage({op:'reset'});stopVideo();};
 };
 $('audio').onclick=()=>enableAudio().catch(e=>diagnostic(e.message));
 $('mic').onchange=()=>{if(!$('mic').checked)stopMicrophone();};
