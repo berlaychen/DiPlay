@@ -230,7 +230,8 @@ def test_real_library_rejects_nonexistent_phone_without_segfault():
                             capture_output=True, timeout=10)
     assert result.returncode == 2, result.stderr.decode(errors='replace')
     assert result.stdout == b''
-    assert b'USB:' in result.stderr
+    # Fail if a missing symbol/library caused exit 2 before the first real ABI call.
+    assert b'USB iPhone unavailable (libimobiledevice code ' in result.stderr, result.stderr
 
 
 @pytest.mark.parametrize('op', ['usb_open', 'usb_data', 'usb_closed', 'bt_open', 'bt_data', 'start'])
